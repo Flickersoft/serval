@@ -42,6 +42,22 @@ updates:
       # up bound to a different libonnxruntime.so than the ASR path, silently and with no error at
       # any verbosity.
       - dependency-name: "Microsoft.ML.OnnxRuntime.Managed"
+      # Majors only. 4.0 gates the compile on a Six Labors license key being present on the build
+      # machine, which a source-built project cannot ask of the people who clone it — see the note
+      # in Shared/Serval.Ai/Serval.Ai.csproj. 3.1.x patches are still wanted.
+      - dependency-name: "SixLabors.ImageSharp"
+        update-types: ["version-update:semver-major"]
+      # Majors only. Microsoft.AspNetCore.OpenApi 10.x declares [2.7.5, 3.0.0): its source generator
+      # cannot compile against 3.x, so a 3.x bump fails with CS0200 in generated code and no edit
+      # here can fix it — see the note in Server/Serval.Server/Serval.Server.csproj. 2.x is wanted.
+      - dependency-name: "Microsoft.OpenApi"
+        update-types: ["version-update:semver-major"]
+      # Majors only. A direct reference solely to lift the native SQLite past GHSA-2m69-gcr7-jv3q —
+      # see the note in CameraModule/Serval.CameraModule/Serval.CameraModule.csproj — so it has to
+      # stay on the line Microsoft.Data.Sqlite resolves its managed half from. A 3.x native binary
+      # against a 2.1.x core is a pairing nobody ships. 2.1.x patches are wanted.
+      - dependency-name: "SQLitePCLRaw.lib.e_sqlite3"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: pub
     directory: /App/serval_app

@@ -8,13 +8,17 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
     <!--
-      Pinned above the version Microsoft.AspNetCore.OpenApi drags in transitively (2.0.0), which
-      carries NU1903 — fixed in 2.7.5. The document endpoint is now served in Production behind
-      Serval:OpenApi:Enabled, so the "unreachable, therefore tolerable" argument no longer holds.
+      Held on 2.x. The XML comment source generator in Microsoft.AspNetCore.OpenApi emits
+      `mediaType.Example = ...`; 3.0 retyped that content dictionary to IOpenApiMediaType, whose
+      Example is get-only, so a 3.x resolve fails the compile with CS0200 inside generated code and
+      nothing in this repository can be edited to fix it. The 10.0 line declares the incompatibility
+      itself — [2.7.5, 3.0.0) — which also holds the transitive floor above NU1903; this reference
+      is what takes the newest 2.x rather than that floor. 3.x waits on an ASP.NET major built
+      against it.
     -->
-    <PackageReference Include="Microsoft.OpenApi" Version="2.11.0" />
+    <PackageReference Include="Microsoft.OpenApi" Version="2.12.0" />
     <PackageReference Include="MongoDB.Driver" Version="3.10.0" />
     <!-- The browsable UI. .NET 10 generates the OpenAPI document but ships no renderer for it. -->
     <PackageReference Include="Scalar.AspNetCore" Version="2.16.17" />

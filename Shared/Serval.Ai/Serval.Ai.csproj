@@ -56,6 +56,13 @@
     hand the RKNN encoder raw RGB, and the motion gate, which needs downscaled grayscale. No
     native dependency (unlike OpenCvSharp, which we avoid because it has no linux-arm64 runtime),
     so it behaves identically on the desktop, the Pi and in the Server's container.
+
+    Held on 3.x. The split license grants Serval the Apache-2.0 terms either way — an AGPL project
+    qualifies, and so does a company under 1M USD — but 4.0 added an MSBuild task that fails the
+    compile unless a sixlabors.lic or $(SixLaborsLicenseKey) is present on the machine doing the
+    build. Serval is built from source by whoever clones it, so that key would have to be carried
+    in the repository for a stranger's `docker compose up` to work at all. 4.x is only takeable if
+    Six Labors confirms a community key may be published; short of that, this stays at 3.1.
   -->
   <ItemGroup>
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />

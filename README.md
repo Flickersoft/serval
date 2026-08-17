@@ -73,7 +73,7 @@ SRT). Linux is what is tested, and what the optional GPU and Coral acceleration 
 
 ```bash
 git clone --depth 1 https://github.com/Flickersoft/serval.git
-cd Serval/deploy
+cd serval/deploy
 cp .env.example .env
 # fill in the two secrets in .env — each has its generation command next to it
 docker compose up -d

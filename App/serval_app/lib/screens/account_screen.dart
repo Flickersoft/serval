@@ -143,11 +143,12 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       ],
     );
 
-    if (!compact)
+    if (!compact) {
       return DecoratedBox(
         decoration: const BoxDecoration(color: Serval.panel),
         child: body,
       );
+    }
 
     return DecoratedBox(
       decoration: const BoxDecoration(color: Serval.panel),
