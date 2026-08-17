@@ -14,7 +14,7 @@
       carries NU1903 — fixed in 2.7.5. The document endpoint is now served in Production behind
       Serval:OpenApi:Enabled, so the "unreachable, therefore tolerable" argument no longer holds.
     -->
-    <PackageReference Include="Microsoft.OpenApi" Version="2.11.0" />
+    <PackageReference Include="Microsoft.OpenApi" Version="3.10.0" />
     <PackageReference Include="MongoDB.Driver" Version="3.10.0" />
     <!-- The browsable UI. .NET 10 generates the OpenAPI document but ships no renderer for it. -->
     <PackageReference Include="Scalar.AspNetCore" Version="2.16.17" />
