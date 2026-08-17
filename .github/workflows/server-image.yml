@@ -102,7 +102,25 @@ jobs:
           # Keeps the .NET restore + apt layers warm between pushes, which is what makes a
           # source-only change a short build.
           # Also what keeps the Edge TPU natives cheap: the TensorFlow clone and CMake build of
-          # libtensorflowlite_c.so is minutes of work that only re-runs when TF_TAG changes, so a
+          # libtensorflowlite_c.so is ~9 minutes of work that only re-runs when TF_TAG changes, so a
           # source-only edit never pays for it.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          #
+          # A registry rather than the Actions cache, for two reasons that both make `type=gha`
+          # unable to hold this particular cache:
+          #
+          #   * Actions caches are scoped by the ref that wrote them, and this workflow builds from
+          #     tags as well as main (see the `create` trigger above). A tag run writes under
+          #     refs/tags/..., which a later push to main cannot read — so the most expensive builds
+          #     produce a cache nothing can use. A registry ref has no such scoping: every run here
+          #     reads and writes the same one.
+          #   * Actions caches share a 10 GB per-repository budget with ci.yml, whose Flutter SDK
+          #     (1.6 GB) and NuGet (~650 MB) entries exist per-ref and are touched on every pull
+          #     request. BuildKit's ~3.6 GB of blobs are touched only when an image is built, so
+          #     under LRU they are always the first eviction — the cache is not merely cold, it is
+          #     structurally unable to stay warm.
+          #
+          # image-manifest + oci-mediatypes are required: GHCR rejects BuildKit's default cache
+          # manifest format. Its own package rather than a tag on serval-server, so the cache blobs
+          # do not appear in the tag list a deployment picks an image from.
+          cache-from: type=registry,ref=${{ env.IMAGE }}-buildcache:main
+          cache-to: type=registry,ref=${{ env.IMAGE }}-buildcache:main,mode=max,image-manifest=true,oci-mediatypes=true
