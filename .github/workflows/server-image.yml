@@ -82,6 +82,14 @@ jobs:
             type=raw,value=${{ steps.version.outputs.version_minor }}
             type=sha,prefix=sha-
 
+      # A registry reference has to be lowercase and github.repository_owner is not — it is the
+      # account name as spelled, "Flickersoft". metadata-action normalises the image name for the
+      # tags it emits above, which is why env.IMAGE can carry it verbatim; cache-from and cache-to
+      # are handed to buildx as written and so need the owner folded here. ${VAR,,} is bash, which
+      # is the default shell for `run` on the Linux runners.
+      - id: cache
+        run: echo "ref=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/serval-server-buildcache:main" >>"$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v7
         with:
           # Repo root: the Server project references ../../Shared/*.
@@ -122,5 +130,5 @@ jobs:
           # image-manifest + oci-mediatypes are required: GHCR rejects BuildKit's default cache
           # manifest format. Its own package rather than a tag on serval-server, so the cache blobs
           # do not appear in the tag list a deployment picks an image from.
-          cache-from: type=registry,ref=${{ env.IMAGE }}-buildcache:main
-          cache-to: type=registry,ref=${{ env.IMAGE }}-buildcache:main,mode=max,image-manifest=true,oci-mediatypes=true
+          cache-from: type=registry,ref=${{ steps.cache.outputs.ref }}
+          cache-to: type=registry,ref=${{ steps.cache.outputs.ref }},mode=max,image-manifest=true,oci-mediatypes=true
