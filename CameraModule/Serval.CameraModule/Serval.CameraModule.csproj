@@ -44,7 +44,7 @@
       2.1.11 that Microsoft.Data.Sqlite resolves to still carries. Nothing here calls into it —
       remove this line once Microsoft.Data.Sqlite resolves 2.1.12 or later on its own.
     -->
-    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.10" />
     <PackageReference Include="PortAudioSharp" Version="0.3.0" />
