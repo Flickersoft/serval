@@ -1,0 +1,75 @@
+@Serval.Server_HostAddress = http://localhost:5211
+
+# The same operations the Scalar UI at {{Serval.Server_HostAddress}}/scalar/v1 drives, for when
+# an editor is closer to hand than a browser.
+
+GET {{Serval.Server_HostAddress}}/api/cameras
+Accept: application/json
+
+###
+
+# Exactly one stream must carry each of 'record', 'detect' and 'live', and every stream needs at
+# least one role — a camera with a single stream declares all three on it. The id becomes a media
+# directory name and a URL segment, so it is restricted to letters, digits, '-' and '_' — as are
+# stream names.
+POST {{Serval.Server_HostAddress}}/api/cameras
+Content-Type: application/json
+
+{
+  "id": "front-door",
+  "name": "Front Door",
+  "location": "Porch",
+  "streams": [
+    {
+      "name": "main",
+      "url": "rtsp://user:password@192.168.1.50:554/Streaming/Channels/101",
+      "roles": ["record", "live"]
+    },
+    {
+      "name": "sub",
+      "url": "rtsp://user:password@192.168.1.50:554/Streaming/Channels/102",
+      "roles": ["detect"]
+    }
+  ],
+  "enabled": true
+}
+
+###
+
+# Video is recorded exactly as the camera sends it. Add "transcode" to the record stream to
+# re-encode instead — the codec is checked against the encoders this host's ffmpeg actually has,
+# so an impossible request comes back as a 400 naming the missing encoder rather than a camera
+# that never records. "bitrate" is optional and falls back to Serval:Ingest:Bitrate.
+PUT {{Serval.Server_HostAddress}}/api/cameras/front-door
+Content-Type: application/json
+
+{
+  "id": "front-door",
+  "name": "Front Door",
+  "location": "Porch",
+  "streams": [
+    {
+      "name": "main",
+      "url": "rtsp://user:password@192.168.1.50:554/Streaming/Channels/101",
+      "roles": ["record", "live"],
+      "transcode": { "codec": "h264", "bitrate": "4M" }
+    },
+    {
+      "name": "sub",
+      "url": "rtsp://user:password@192.168.1.50:554/Streaming/Channels/102",
+      "roles": ["detect"]
+    }
+  ],
+  "enabled": true
+}
+
+###
+
+GET {{Serval.Server_HostAddress}}/api/cameras/front-door
+Accept: application/json
+
+###
+
+DELETE {{Serval.Server_HostAddress}}/api/cameras/front-door
+
+###

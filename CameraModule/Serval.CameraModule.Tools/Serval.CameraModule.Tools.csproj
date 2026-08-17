@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Serval.CameraModule</RootNamespace>
+    <AssemblyName>camera-module-tools</AssemblyName>
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    The calibration and bring-up diagnostics, split out of the worker so the deployed service
+    carries none of them. Referencing the worker project is what keeps a diagnostic measuring
+    the exact code a deployment runs — CameraModuleOptions, the V4L2 capture, and the shared
+    gates all come from the same assemblies the service uses.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="../Serval.CameraModule/Serval.CameraModule.csproj" />
+  </ItemGroup>
+
+</Project>

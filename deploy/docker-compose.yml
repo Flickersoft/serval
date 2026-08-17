@@ -1,0 +1,212 @@
+# Serval — quickstart stack. Three services: the Server (which bundles the web App — once it's
+# up, http://<this-host>:8080/ is the App itself, same origin as the API), MongoDB, and a go2rtc
+# sidecar for the low-latency WebRTC live view.
+#
+# Get running:
+#
+#   1. cp .env.example .env
+#   2. Fill in the two required secrets in .env (each has its command written next to it).
+#   3. docker compose up -d
+#   4. Open http://<this-host>:8080/ and sign in with the admin account from .env.
+#
+# Recording, replay, the snapshot wall and live view all work from here with no model files and
+# no extra hardware. The AI features (object detection, scene descriptions, transcription) are
+# opt-in below — see "Server-side AI".
+#
+# Host-specific tuning examples live in examples/: a TrueNAS SCALE + AMD iGPU deployment and an
+# Intel N100 + Coral Edge TPU deployment, both real and both commented for their hardware.
+
+services:
+  server:
+    # The image name lives in .env so it is set in exactly one place. To build from source
+    # instead of pulling, uncomment `build:` below and run `docker compose up -d --build` from
+    # this directory (the context is the repo root, so this needs a full clone).
+    image: ${SERVAL_IMAGE:-ghcr.io/flickersoft/serval-server:latest}
+    # build:
+    #   context: ..
+    #   dockerfile: Server/Serval.Server/Dockerfile
+    depends_on:
+      - mongo
+      - go2rtc
+    ports:
+      - "8080:8080"
+    environment:
+      Serval__Mongo__ConnectionString: mongodb://mongo:27017
+      Serval__Mongo__Database: serval
+      Serval__Media__Root: /media
+
+      # Both are required, and compose stops with the message below if either is missing from
+      # .env — on purpose, so a copied file cannot quietly become a deployment with secrets the
+      # whole internet has. The server refuses to boot on placeholder values as a second line of
+      # defence.
+      Serval__Auth__SigningKey: ${SERVAL_SIGNING_KEY:?missing — generate with `openssl rand -base64 32` and put it in .env}
+      Serval__Auth__BootstrapAdminUsername: ${SERVAL_ADMIN_USERNAME:-admin}
+      # First run only: creates this Admin while the Users collection is empty, ignored on every
+      # later restart. Change the password from the app once signed in, not here.
+      Serval__Auth__BootstrapAdminPassword: ${SERVAL_ADMIN_PASSWORD:?missing — set the first admin's password in .env}
+
+      # Shared secret for POST /api/cameras/{id}/telemetry, only used by an edge CameraModule.
+      # Unset, that one route rejects every request and nothing else is affected.
+      # Serval__ApiKey: ${SERVAL_API_KEY}
+
+      # Retention is by age only, with no size cap — this number and the disk behind /media are
+      # chosen together. As an anchor: six cameras recording 4K main streams is roughly
+      # 300-400 GB a day.
+      Serval__Media__RetentionDays: ${SERVAL_RETENTION_DAYS:-7}
+
+      # Low-latency WebRTC live view via the go2rtc sidecar below.
+      Serval__WebRtc__Enabled: "true"
+      Serval__WebRtc__Go2RtcUrl: http://go2rtc:1984
+
+      # --- Hardware video encode (optional) ------------------------------------------------
+      # Nothing is re-encoded unless a camera's record stream asks for it, so this sits idle on
+      # a stack that only records. To use the GPU (VAAPI, Intel or AMD) when a stream does ask,
+      # uncomment this and the `devices:` block below. Confirm the render node with
+      # `ls -l /dev/dri` on the host.
+      # Serval__Ingest__HwAccelDevice: /dev/dri/renderD128
+
+      # --- Server-side AI (optional, off by default) ---------------------------------------
+      # A server that only records should not load weights it never uses, so everything here is
+      # opt-in. Model files are NOT in the image — put them in ./models first (see the README's
+      # "Enabling the AI"), then uncomment and `docker compose up -d --force-recreate server`.
+      # Raise mem_limit below to 8g+ when enabling the vision model, and pin
+      # Serval__Ai__Asr__Language where the site has one language — SenseVoice's "auto" misreads
+      # short utterances.
+      #
+      # ServerAi is the master switch; each model has its own switch behind it. Setting only an
+      # inner switch starts a server that logs nothing about AI at all, which is a confusing five
+      # minutes.
+      # Serval__ServerAi__Enabled: "true"
+      # Serval__Ai__Detection__Enabled: "true"     # objects (person, car, ...) — needs models/detect/model.onnx + labels.txt
+      # Serval__Ai__Vision__Enabled: "true"        # scene descriptions + clip summaries — needs the Qwen3-VL weights (~2.3 GB)
+      # Serval__Ai__Speaker__Enabled: "true"       # transcription speaker labels + diarization
+      # Serval__Ai__Sound__Enabled: "true"         # sound events: breaking glass, alarms, dogs, ...
+      # Serval__Ai__Asr__Language: "en"
+    volumes:
+      # Recordings, snapshots, live manifests — the big writer. A named volume by default; to
+      # keep recordings on a specific disk, replace it with a bind mount:
+      #   - /path/on/big/disk:/media
+      - video:/media
+      # Model weights, mounted read-only from ./models (empty until you enable the AI — an empty
+      # directory costs nothing, the server just notes the models are absent and keeps recording).
+      - ./models:/app/models:ro
+    # Raw frames on their way to object detection: written by ffmpeg, read and deleted
+    # immediately. Memory rather than disk on purpose — a busy host pushes tens of MB a second
+    # through here and none of it is worth writing to the device holding the recordings.
+    tmpfs:
+      - /dev/shm/serval:size=256m
+    # Give the container the GPU, for VAAPI encode and/or Vulkan offload of the vision model.
+    # NVENC needs the NVIDIA container runtime instead. Software encode needs neither.
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # GPU utilisation on the status page. amdgpu needs nothing beyond the device above; Intel
+    # reports usage through system-wide perf counters, which need this capability to open.
+    # Without it the page reads "not reported" and names this line.
+    # cap_add:
+    #   - PERFMON
+    # Enough for recording. With the vision model enabled, 8g+ (see examples/ for measured
+    # working sets on real hosts).
+    mem_limit: 2g
+    restart: unless-stopped
+    # Logs are stdout only — no file sink in the app, because the daemon already rotates.
+    # Without a cap they grow forever on the same disk the video lives on. 10m x 5 = 50 MB.
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  mongo:
+    image: mongo:8
+    command: ["--wiredTigerCacheSizeGB", "1"]  # cap the cache so it doesn't grab host RAM
+    volumes:
+      # The database is small and wants IOPS where recordings want capacity — on a multi-disk
+      # host, bind-mount this to the fast disk rather than the big one:
+      #   - /path/on/fast/disk:/data/db
+      - mongo-data:/data/db
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *logging
+
+  # WebRTC media server for the low-latency focused live view. The Server registers a stream per
+  # camera at runtime, so none are configured statically — go2rtc pulls a camera's RTSP only
+  # while a viewer is connected and adds no constant load. WebRTC media flows directly
+  # browser <-> go2rtc (the 8666 port), never through the Server.
+  #
+  # Pinned rather than :latest — this is the one service where an unattended upgrade could break
+  # live view without any code having changed.
+  go2rtc:
+    image: alexxit/go2rtc:1.9.14
+    # The second -config merges over the file and carries the one value that is per-host: the
+    # address(es) the browser is told to send WebRTC media to. Set SERVAL_WEBRTC_CANDIDATES in
+    # .env — comma-separated for more than one (LAN + external) — and never edit go2rtc.yaml.
+    # The stun default auto-discovers the public address, which is enough to try things out but
+    # wrong for LAN-only use; see .env.example.
+    command:
+      - go2rtc
+      - -config
+      - /config/go2rtc.yaml
+      - -config
+      - "{webrtc: {candidates: [${SERVAL_WEBRTC_CANDIDATES:-stun:8666}]}}"
+    volumes:
+      - ./go2rtc.yaml:/config/go2rtc.yaml:ro
+    ports:
+      - "8666:8666/tcp"     # WebRTC media (also served over UDP)
+      - "8666:8666/udp"
+      # The API (1984) is reached only by the Server over the internal network — not published.
+    mem_limit: 512m
+    restart: unless-stopped
+    logging: *logging
+
+  # --- one-shot setup helpers -------------------------------------------------------------
+  # Behind the "setup" profile so `docker compose up` never starts them; run each on demand.
+  #
+  # Downloads every model except the object detector into ./models (~3.5 GB, or set
+  # SKIP_VISION=1 to skip the 2.3 GB scene-description model):
+  #
+  #   docker compose --profile setup run --rm fetch-models
+  fetch-models:
+    profiles: ["setup"]
+    image: ${SERVAL_IMAGE:-ghcr.io/flickersoft/serval-server:latest}
+    entrypoint: ["bash", "/app/fetch-models.sh"]
+    environment:
+      MODEL_DIR: /models
+      SKIP_VISION: ${SKIP_VISION:-0}
+      SKIP_SPEAKER: ${SKIP_SPEAKER:-0}
+      SKIP_SOUND: ${SKIP_SOUND:-0}
+      SKIP_DETECTION: ${SKIP_DETECTION:-0}
+    volumes:
+      - ./models:/models
+
+  # Exports the object-detection model Serval is tested against (Ultralytics YOLO26n, stock
+  # COCO-80) into ./models/detect as model.onnx + labels.txt:
+  #
+  #   docker compose --profile setup run --rm export-detector
+  #
+  # labels.txt is written from the model's own class names, so the two cannot disagree — a
+  # mismatched labels file names every detection wrongly forever, with no error anywhere.
+  # dynamic=True lets each camera get an input shape at its own aspect ratio (a portrait
+  # doorbell, an ultrawide) instead of squeezing everything into one landscape rectangle.
+  # Ultralytics and the YOLO26n weights are AGPL-3.0, the same license as Serval.
+  export-detector:
+    profiles: ["setup"]
+    image: ultralytics/ultralytics:8.4.20
+    working_dir: /out
+    volumes:
+      - ./models/detect:/out
+    entrypoint: ["python", "-c"]
+    command:
+      - |
+        from ultralytics import YOLO
+        m = YOLO("yolo26n.pt")
+        m.export(format="onnx", simplify=True, dynamic=True)
+        with open("labels.txt", "w") as f:
+            f.writelines(m.names[i] + "\n" for i in range(len(m.names)))
+        import os
+        os.replace("yolo26n.onnx", "model.onnx")
+        os.remove("yolo26n.pt")
+        print("wrote model.onnx and labels.txt")
+
+volumes:
+  video:
+  mongo-data:

@@ -1,0 +1,23 @@
+# Machine-local Claude Code permissions (per-module .gitignore files ignore their own copies)
+.claude/settings.local.json
+
+# OS / editor cruft (repo-wide; each module also ignores its own build output)
+.DS_Store
+Thumbs.db
+*~
+
+# Screenshots, snapshots and console logs a browser-driven run leaves behind — written to
+# whatever directory the Playwright MCP server was started in, which is the repo root.
+# See Docs/testing.md, "Driving the web build in a browser".
+.playwright-mcp/
+
+# Known-but-unfixed security findings. Kept out of the repository because a public list of a
+# server's own weaknesses is a to-do list for whoever reads it first; items move to public issues
+# as they are fixed. Reporting a new one is CONTRIBUTING.md's private-advisory route, not this file.
+Docs/security-backlog.md
+
+# The quickstart's local state: secrets in .env, gigabytes of downloaded weights in models/.
+deploy/.env
+deploy/models/*
+!deploy/models/.gitkeep
+

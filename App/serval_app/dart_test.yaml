@@ -1,0 +1,6 @@
+# Declares the tag test/golden_capture_test.dart carries, so the runner does not warn about an
+# undeclared one. `flutter test` runs everything as usual; the tag exists so .github/workflows/ci.yml
+# can run the pixel comparisons as a step of their own.
+tags:
+  golden:
+    description: Whole-screen captures compared against test/goldens/.

@@ -1,0 +1,35 @@
+<Project>
+
+  <PropertyGroup>
+    <Product>Serval</Product>
+    <Company>Flickersoft LLC</Company>
+    <Authors>Flickersoft LLC</Authors>
+    <Copyright>Copyright (C) 2026 Flickersoft LLC</Copyright>
+    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Flickersoft/Serval</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <!--
+    Version, for every assembly in the solution.
+
+    The real number lives in git: a `v<major>.<minor>.0` tag names the release, and `git describe`
+    counts the commits since it to get the patch. The image workflow does that and passes the
+    result in as -p:VersionPrefix=<major.minor.patch>.
+
+    0.0.0 is therefore not a fallback version so much as a refusal to invent one. A build made any
+    other way — `dotnet build` on a laptop, an IDE, a source tarball — has no way to know which
+    release it belongs near, and guessing the nearest tag would produce a number that collides with
+    a real published build. `0.0.0-dev` cannot be mistaken for anything.
+
+    SourceRevisionId is the tell for "built by the workflow": the SDK appends it to
+    InformationalVersion as +<sha>, which is what GET /api/system/version splits back apart. A build
+    that has no revision to name has no business claiming to be a release either, so the two are
+    decided together rather than by separate flags that could disagree.
+  -->
+  <PropertyGroup>
+    <VersionPrefix Condition="'$(VersionPrefix)' == ''">0.0.0</VersionPrefix>
+    <VersionSuffix Condition="'$(VersionSuffix)' == '' AND '$(SourceRevisionId)' == ''">dev</VersionSuffix>
+  </PropertyGroup>
+
+</Project>

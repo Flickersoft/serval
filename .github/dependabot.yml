@@ -1,0 +1,55 @@
+# Keeps the pinned GitHub Actions, the NuGet packages and the App's pub dependencies current.
+#
+# All three, now that .github/workflows/ci.yml gates every pull request: an unattended bump arrives
+# as a proposal that has already built warning-free, run all three .NET suites, and run the App's
+# format, analyze and test. Nothing here is merged on the strength of a version number alone.
+#
+# Two NuGet pins are exact on purpose and are ignored below rather than bumped. The comments in
+# Shared/Serval.Ai/Serval.Ai.csproj say what has to be re-checked by hand before either moves.
+
+version: 2
+
+updates:
+  # The workflows in this directory are the supply chain for the image that lands on a deployment,
+  # and an action pinned to a major tag still moves under you.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+    # Minors and patches as one pull request rather than fifteen: the runtime and ASP.NET packages
+    # ship together on a servicing date, and splitting them produces pull requests that each
+    # half-bump the same graph. Majors still arrive alone, which is where they belong — LLamaSharp
+    # and its backend must move together, so a major will arrive as two pull requests and one will
+    # fail to build until the other lands.
+    groups:
+      dotnet:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # SenseVoiceInterop mirrors the native SherpaOnnxOfflineRecognizerResult struct layout to
+      # reach the emotion field. Moving this means re-reading c-api.h, not merging a diff.
+      - dependency-name: "org.k2fsa.sherpa.onnx*"
+      # Tied to the ONNX Runtime sherpa-onnx ships. Bumping it on its own is how the detector ends
+      # up bound to a different libonnxruntime.so than the ASR path, silently and with no error at
+      # any verbosity.
+      - dependency-name: "Microsoft.ML.OnnxRuntime.Managed"
+
+  - package-ecosystem: pub
+    directory: /App/serval_app
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+    groups:
+      app:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

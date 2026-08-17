@@ -1,0 +1,22 @@
+bin/
+obj/
+
+# Model weights are downloaded via scripts/fetch-models.sh, not committed...
+# (models/* rather than models/ so the one vendored file below can be re-included.)
+Serval.CameraModule/models/*
+
+# ...except Silero VAD. At 2.3MB it is small enough to vendor, and vendoring pins the
+# exact version: the copy in sherpa-onnx's release assets is v4 (h/c inputs) while this
+# is v5 (state input). Both work, but the segmentation differs, and setup should not be
+# a coin flip.
+!Serval.CameraModule/models/silero_vad.onnx
+
+# Runtime artifacts
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+data/
+
+# Machine-local Claude Code permissions
+.claude/settings.local.json

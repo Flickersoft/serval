@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- The suite must run on a fresh clone with no models downloaded: nothing here loads a
+         weight file, a fixture, or a device. See the plan's "What is deliberately not tested". -->
+    <!-- xUnit1051 wants TestContext.Current.CancellationToken on every awaited DB call; these
+         tests are sub-second and single-shot, so threading it through adds noise, not safety. -->
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Serval.CameraModule/Serval.CameraModule.csproj" />
+  </ItemGroup>
+
+</Project>

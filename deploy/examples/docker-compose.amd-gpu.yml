@@ -1,0 +1,198 @@
+# Serval Server on an AMD iGPU host — a real, tested deployment shape, written against TrueNAS
+# SCALE (25.10 Goldeye): paste into Apps -> Discover -> Custom App -> "Install via YAML".
+#
+# This is a deployment's starting point, not a record of any particular one — a box that has been
+# running for a while will have diverged, and should have. ../docker-compose.yml is the generic
+# quickstart; the differences between the two are deliberate and all follow from the host:
+#
+#   * No `build:`. TrueNAS Apps only runs pre-built images, so the server image comes from GHCR
+#     (pushed by .github/workflows/server-image.yml). `pull_policy: always` means stopping and
+#     starting the app in the UI re-pulls, which is the whole update loop.
+#   * Bind mounts on ZFS datasets, not named volumes: recordings and the database belong on the
+#     pool where they are visible and snapshottable, not under /mnt/.ix-apps.
+#   * The GPU is passed through to do two jobs on one device: H.264 encode (VAAPI) and, optionally,
+#     the vision model (Vulkan). Which of the two a part can manage varies — a 5700G's Vega iGPU
+#     does both.
+#
+# The server image bundles the App's web build (see Server/Serval.Server/Dockerfile) — once this
+# is up, http://<this-box>:8080/ is the App itself, same origin as the API, no separate host.
+#
+# BEFORE PASTING, edit:
+#   1. Every /mnt/pool/ path -> your pool name.
+#   2. Serval__ApiKey -> a real secret.
+#   3. The webrtc candidates in the go2rtc command below -> this box's LAN IP.
+#   4. Serval__Auth__SigningKey and Serval__Auth__BootstrapAdminPassword -> real secrets.
+#
+# And put the models on the pool with fetch-models.sh (see Docs/deployment.md). It fetches
+# everything except the object detection weights — see Serval__Ai__Detection__Enabled below for
+# the export Serval is tested against, and what happens until those two files exist.
+
+services:
+  server:
+    image: ghcr.io/flickersoft/serval-server:latest
+    # Re-pull on every `up`. Without this, restarting the app keeps running the old image and
+    # "I pushed a fix but nothing changed" becomes a recurring twenty minutes.
+    pull_policy: always
+    depends_on:
+      - mongo
+      - go2rtc
+    ports:
+      - "8080:8080"
+    environment:
+      Serval__Mongo__ConnectionString: mongodb://mongo:27017
+      Serval__Mongo__Database: serval
+      Serval__Media__Root: /media
+
+      # Shared secret for POST /api/cameras/{id}/telemetry. An empty value closes that route rather
+      # than opening it, so a Server with no camera modules can leave this alone; set it to
+      # something real before pointing a module here, and match it in the module's Output:ApiKey.
+      Serval__ApiKey: "CHANGE-ME"
+
+      # Signing key for user login (access + stream) tokens. Unlike Serval__ApiKey, there is no
+      # safe empty value here — every endpoint except telemetry ingest now requires a logged-in
+      # user, so the server refuses to start without this set. It also refuses to start while this
+      # still reads CHANGE-ME. Generate one with `openssl rand -base64 32`.
+      Serval__Auth__SigningKey: "CHANGE-ME"
+
+      # First-run only: creates this Admin account if (and only if) the Users collection is
+      # still empty. Ignored on every later restart whether or not you leave these set — change
+      # the password from the app's user management screen (or PUT /api/auth/users/{username})
+      # once logged in, not here.
+      Serval__Auth__BootstrapAdminUsername: "admin"
+      Serval__Auth__BootstrapAdminPassword: "CHANGE-ME"
+
+      # --- Video encode: AMD VAAPI on the iGPU ---------------------------------------------
+      # Nothing is transcoded unless a camera's record stream asks for it, so this setting sits
+      # idle on a stack that only records. When a stream does ask, what the encoder can manage is a
+      # property of the part: a 5700G (Cezanne, VCN 2.2) does H.264 and HEVC, VP9 encode exists on
+      # no AMD part, and AV1 encode needs RDNA3. Asking for one the host lacks is rejected at the
+      # API — naming the missing encoder — rather than failing inside ffmpeg, per camera, at runtime.
+      #
+      # Confirm the render node with `ls -l /dev/dri` on the host; a second GPU shifts the numbering.
+      Serval__Ingest__HwAccelDevice: /dev/dri/renderD128
+      # Leave Serval__Ingest__Encoder unset — EncoderSelector ignores it when HwAccelDevice is set.
+
+      # --- Server-side AI ------------------------------------------------------------------
+      # Weights are mounted at /app/models below, which is exactly where the built-in model paths
+      # resolve to (they are relative, and the content root is WORKDIR /app), so no path overrides
+      # here.
+      Serval__ServerAi__Enabled: "true"
+      Serval__Ai__Vision__Enabled: "true"
+      Serval__Ai__Speaker__Enabled: "true"
+
+      # A second audio model on top of transcription, so it is off unless asked for. On here
+      # because a camera that hears breaking glass or an alarm is most of the point of one.
+      Serval__Ai__Sound__Enabled: "true"
+
+      # Object recognition. It replaces the movement gate rather than sitting behind it, and it is
+      # the difference between knowing something changed and knowing a person has been at the door
+      # for forty seconds — the only one of the two that can see something present but still.
+      #
+      # On here, but it needs weights you supply: model.onnx and labels.txt under
+      # /app/models/detect. fetch-models.sh does not fetch those — it must be an end-to-end export,
+      # and Serval is developed and tested against Ultralytics YOLO26n, stock COCO-80. Export both
+      # files with scripts/export-detector.sh (or the deploy compose's export-detector one-shot),
+      # which runs:
+      #
+      #   yolo export model=yolo26n.pt format=onnx simplify=True dynamic=True
+      #
+      # Needs ultralytics >= 8.4.0. Do not pass end2end=False, and note that no pre-YOLO26 model
+      # works: the older one-to-many head is rejected at startup.
+      #
+      # Until both files exist the server warns at startup, names the paths it looked in, and
+      # cameras keep using the movement gate — so leaving this on while you sort the weights out
+      # costs a log line, not a failed deploy. A model that is present but is the wrong head does
+      # stop the server, because it cannot be decoded into anything.
+      #
+      # ~44 ms a frame on a desktop CPU at two threads, so a few percent of one core per camera at
+      # one frame a second. The real cost is what it then asks the description model to look at.
+      Serval__Ai__Detection__Enabled: "true"
+
+      # Match physical cores rather than threads: llama.cpp is usually slowest above the physical
+      # count. Eight for an eight-core part, and video encode is on the GPU rather than competing
+      # for them.
+      Serval__Ai__Vision__NumThreads: "8"
+      Serval__Ai__Asr__NumThreads: "4"
+      # SenseVoice's "auto" language ID misreads short or noisy English utterances as zh/ja/ko/yue.
+      # Pin the language where the site has one; drop this line where it genuinely does not.
+      Serval__Ai__Asr__Language: "en"
+
+      # Audio thresholds are deliberately not here. The one that decides whether speech is heard at
+      # all is a property of the room, so it belongs on the camera as `audioTuning` on its registry
+      # entry — see Cameras/CameraAudioTuning.cs. The built-in 0.01 is right for an outdoor camera
+      # and discards most of a quiet indoor one's speech; tune it per camera in the App.
+
+      # GPU offload for the vision model is off unless set, and left that way *deliberately*. The
+      # image is built with the Vulkan backend so this is a restart away, but on an APU the iGPU
+      # shares the CPU's DDR4 bus and token generation is bandwidth-bound — it is not a given that
+      # 99 beats 0. Time a scene description both ways and keep the winner. Set both or neither.
+      # Serval__Ai__Vision__GpuLayers: "99"
+      # Serval__Ai__Vision__ProjectorOnGpu: "true"
+
+      # --- WebRTC live view ----------------------------------------------------------------
+      Serval__WebRtc__Enabled: "true"
+      Serval__WebRtc__Go2RtcUrl: http://go2rtc:1984
+
+      # --- API explorer --------------------------------------------------------------------
+      # On by default: http://<this-box>:8080/scalar/v1 is a Swagger-style GUI for calling the API
+      # directly, handy for debugging alongside the App itself (http://<this-box>:8080/). It's
+      # anonymous by design (see BearerSecuritySchemeTransformer), so uncomment this the moment
+      # this box is reachable off the LAN.
+      # Serval__OpenApi__Enabled: "false"
+    volumes:
+      - /mnt/pool/serval/media:/media                    # segments, snapshots, conversation audio
+      - /mnt/pool/serval/models:/app/models:ro           # ~3.3 GB of weights, never baked into the image
+    # Detection's raw frames, in memory rather than on the pool. Tens of MB a second of write-then-
+    # delete is the one workload that has no business touching ZFS: nothing here survives a restart,
+    # nothing here is worth a snapshot, and the churn would only cost the pool write amplification.
+    tmpfs:
+      - /dev/shm/serval:size=256m
+    devices:
+      - /dev/dri:/dev/dri                                # VAAPI encode + Vulkan inference
+    # No cap_add here, deliberately. This host is amdgpu, which publishes gpu_busy_percent as a
+    # plain sysfs file — so the status page already shows GPU utilisation with no capability at all.
+    # The CAP_PERFMON block in docker-compose.intel-coral.yml exists because Intel has no such file.
+    # Qwen3-VL-2B Q8 is ~2.2 GB resident before the projector, the KV cache, SenseVoice and one
+    # ffmpeg per camera — and with GpuLayers set, the iGPU's memory comes out of here too.
+    mem_limit: 8g
+    restart: unless-stopped
+    # Logs are stdout only — no file sink in the app, because the daemon already rotates. Without
+    # a cap they grow forever on the same pool the video lives on. 10m x 5 = 50 MB.
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  mongo:
+    image: mongo:8
+    command: ["--wiredTigerCacheSizeGB", "1"]  # cap the cache so it doesn't grab host RAM
+    volumes:
+      - /mnt/pool/serval/mongo:/data/db
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *logging
+
+  # WebRTC media server for the low-latency focused live view. The server registers a stream per
+  # RTSP camera at runtime, so no streams are configured statically. go2rtc pulls each camera's
+  # RTSP only while a viewer is connected — it adds no constant load. WebRTC media flows directly
+  # browser <-> go2rtc (the 8666 port), never through the server.
+  #
+  # Pinned rather than :latest: this is the one service where an unattended upgrade could break
+  # live view without any code having changed.
+  go2rtc:
+    image: alexxit/go2rtc:1.9.14
+    # All of go2rtc's config inline, so no config file lives on the pool at all. The candidates
+    # entry is the address the browser is told to send WebRTC media to — set it to this box's
+    # LAN IP, comma-separated with a second address for access from outside the LAN.
+    command:
+      - go2rtc
+      - -config
+      - "{api: {listen: ':1984'}, webrtc: {listen: ':8666', candidates: [192.168.1.20:8666]}}"
+    ports:
+      - "8666:8666/tcp"     # WebRTC media (also served over UDP)
+      - "8666:8666/udp"
+      # The API (1984) is reached only by the server over the internal network — not published.
+    mem_limit: 512m
+    restart: unless-stopped
+    logging: *logging

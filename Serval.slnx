@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/CameraModule/">
+    <Project Path="CameraModule/Serval.CameraModule.Tests/Serval.CameraModule.Tests.csproj" />
+    <Project Path="CameraModule/Serval.CameraModule.Tools/Serval.CameraModule.Tools.csproj" />
+    <Project Path="CameraModule/Serval.CameraModule/Serval.CameraModule.csproj" />
+  </Folder>
+  <Folder Name="/Server/">
+    <Project Path="Server/Serval.Server.Tests/Serval.Server.Tests.csproj" />
+    <Project Path="Server/Serval.Server/Serval.Server.csproj" />
+  </Folder>
+  <Folder Name="/Shared/">
+    <Project Path="Shared/Serval.Ai.Core/Serval.Ai.Core.csproj" />
+    <Project Path="Shared/Serval.Ai.Tests/Serval.Ai.Tests.csproj" />
+    <Project Path="Shared/Serval.Ai/Serval.Ai.csproj" />
+    <Project Path="Shared/Serval.Contracts/Serval.Contracts.csproj" />
+  </Folder>
+</Solution>

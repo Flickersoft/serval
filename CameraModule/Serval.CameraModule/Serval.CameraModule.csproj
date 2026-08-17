@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Serval.CameraModule</RootNamespace>
+    <!-- Dotted assembly names read badly as an exec/service path, so the binary stays camera-module. -->
+    <AssemblyName>camera-module</AssemblyName>
+    <UserSecretsId>serval-cameramodule-9d58e45d-bef7-43c8-bb7c-dc901b1ec88d</UserSecretsId>
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+    <!--
+      No ICU dependency. A fresh Orange Pi (Debian trixie) ships without libicu, and the
+      self-contained binary aborts at startup demanding it. This worker handles only ASCII
+      labels, ordinal string comparisons, and ISO-8601 ("o") timestamps — nothing
+      culture-sensitive — so invariant globalization is correct here and removes a system
+      package from the deployment. Verified with the selftest diagnostic on the RK3588.
+    -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- Lets Serval.CameraModule.Tests reach internal test seams. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Serval.CameraModule.Tests" />
+  </ItemGroup>
+
+  <!--
+    The detection models, the gates and the conversation logic live in Serval.Ai, which the
+    Server also references — a camera gets the same AI whether or not it has an edge device.
+    What stays in this project is what only an edge module has: V4L2 capture, PortAudio, and
+    the durable SQLite outbox.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="../../Shared/Serval.Ai/Serval.Ai.csproj" />
+    <ProjectReference Include="../../Shared/Serval.Ai.Core/Serval.Ai.Core.csproj" />
+    <ProjectReference Include="../../Shared/Serval.Contracts/Serval.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+    <!--
+      Direct reference only to lift the native SQLite build past GHSA-2m69-gcr7-jv3q, which the
+      2.1.11 that Microsoft.Data.Sqlite resolves to still carries. Nothing here calls into it —
+      remove this line once Microsoft.Data.Sqlite resolves 2.1.12 or later on its own.
+    -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.10" />
+    <PackageReference Include="PortAudioSharp" Version="0.3.0" />
+  </ItemGroup>
+
+  <!--
+    No OpenCvSharp: it has no linux-arm64 runtime, so the Pi could not capture at all.
+    V4l2MjpegCamera talks to the kernel directly instead, which works on both targets and
+    yields JPEG frames with no decode/encode round trip.
+  -->
+
+</Project>

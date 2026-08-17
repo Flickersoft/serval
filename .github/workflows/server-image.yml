@@ -1,0 +1,108 @@
+# Builds the Server container and pushes it to GHCR, where deployments pull it from
+# (see deploy/docker-compose.yml).
+name: server-image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Server/Serval.Server/**"
+      - "Shared/**"
+      - "App/serval_app/**"
+      - ".dockerignore"
+      - ".github/workflows/server-image.yml"
+  # Pushing a v<major>.<minor>.0 tag is how the minor is bumped, and the .0 it names has to get an
+  # image of its own even though the commit it points at was probably built already.
+  #
+  # `create` rather than a tags: entry under push: above — the paths filter applies to every push
+  # event, and a tag introduces no files, so a tag push can match nothing and be silently skipped.
+  # Path filters are only valid for push and pull_request, so this route cannot be filtered out.
+  create:
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/serval-server
+
+jobs:
+  build:
+    # `create` fires for every ref, branches included. Only a version tag should build.
+    if: github.event_name != 'create' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # git describe needs the tags and the commits between them. A shallow checkout has
+          # neither, and would fail rather than mislead — but failing the build to save a fetch is
+          # a poor trade on a job that then spends minutes compiling llama.cpp.
+          fetch-depth: 0
+
+      # The version is the nearest v<major>.<minor>.0 tag with the commits since it as the patch:
+      # v0.1.0 plus 7 commits is 0.1.7. Bumping the minor is therefore `git tag v0.2.0`, and the
+      # patch takes care of itself. No tag at all fails this step outright, which is the point —
+      # there is no version to guess and a build that invented one would collide with a real
+      # release.
+      - id: version
+        run: |
+          described=$(git describe --tags --match 'v[0-9]*' --long)
+          version=$(printf '%s' "${described#v}" | awk -F- '{split($1,v,"."); print v[1]"."v[2]"."$2}')
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "version_minor=${version%.*}" >>"$GITHUB_OUTPUT"
+          echo "Building $version from $described" >>"$GITHUB_STEP_SUMMARY"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # Built-in token; no PAT needed to push from within this repo.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          # Four tags, narrowing from "whatever is newest" to one exact build:
+          #   latest      moves every push to main — what an unpinned deployment follows
+          #   0.1         moves within a minor — patches arrive, the shape does not change
+          #   0.1.7       one release, never rewritten
+          #   sha-abc1234 one commit; rolling back on the NAS is editing :latest to this
+          #
+          # latest is held to the default branch so that tagging an *older* commit publishes its
+          # version without dragging latest backwards. type=raw rather than type=semver throughout:
+          # type=semver reads the tag off the ref and so produces nothing on the push-to-main builds
+          # that are most of them, while the version step's answer is right for both.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.version_minor }}
+            type=sha,prefix=sha-
+
+      - uses: docker/build-push-action@v7
+        with:
+          # Repo root: the Server project references ../../Shared/*.
+          context: .
+          file: Server/Serval.Server/Dockerfile
+          # The Server targets x86_64 hosts. Building arm64 too would roughly double the job for
+          # nothing — the arm64 target in this repo is the CameraModule, which is not containerised.
+          platforms: linux/amd64
+          # Both are stamped into the assembly and into the web App. The commit is what AGPL
+          # section 13 turns into a source offer in the UI; the version is what a person quotes in
+          # a bug report. Neither can be derived inside the build — .git/ is not in the context.
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
+            SERVAL_VERSION=${{ steps.version.outputs.version }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Keeps the .NET restore + apt layers warm between pushes, which is what makes a
+          # source-only change a short build.
+          # Also what keeps the Edge TPU natives cheap: the TensorFlow clone and CMake build of
+          # libtensorflowlite_c.so is minutes of work that only re-runs when TF_TAG changes, so a
+          # source-only edit never pays for it.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

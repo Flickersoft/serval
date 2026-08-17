@@ -1,0 +1,23 @@
+# .NET build output (covers every project under Server/, incl. a future Serval.Server.Tests/)
+[Bb]in/
+[Oo]bj/
+
+# Publish / package output
+[Pp]ublish/
+*.nupkg
+
+# User- and machine-local
+*.user
+*.suo
+*.DotSettings.user
+mssql*.mdf
+
+# IDE
+.vs/
+.idea/
+
+# Machine-local secrets (appsettings.json / appsettings.Development.json ARE committed)
+appsettings.*.local.json
+
+# Recorded video, HLS segments, and snapshots — data, not source
+media/

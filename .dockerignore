@@ -1,0 +1,43 @@
+# The Server image builds from the repo root (see Server/Serval.Server/Dockerfile), so this file
+# — not the one inside Server/Serval.Server/ — is what governs the build context.
+
+# Build output and local state. Never ship these into the image. Scoped to Server/ and Shared/
+# specifically: App/serval_app has its own lib/data, lib/models, lib/media — ordinary Dart source
+# folders, not build output — which a bare **/data/ etc. would silently drop from the build
+# context (as happened: undefined-symbol errors for types that live in lib/data).
+Server/**/bin/
+Server/**/obj/
+Server/**/media/
+Server/**/data/
+Shared/**/bin/
+Shared/**/obj/
+**/*.user
+**/appsettings.*.local.json
+
+# Model weights: 3.3 GB that are mounted as a volume at runtime, never baked in. Without this
+# every build would upload them to the daemon before doing anything.
+Server/**/models/
+
+# CameraModule is a separate linux-arm64 deployment the Server image does not build. The one
+# exception is the vendored Silero VAD (2.3 MB, version-pinned in git), which the image carries
+# as a seed so /app/fetch-models.sh can populate a models volume without a repo checkout.
+CameraModule/
+!CameraModule/Serval.CameraModule/models/silero_vad.onnx
+
+# App/serval_app IS built into the Server image now (its web build ends up in wwwroot — see
+# Server/Serval.Server/Dockerfile), so only its build output is excluded, not the source itself.
+App/serval_app/build/
+App/serval_app/.dart_tool/
+App/serval_app/linux/flutter/ephemeral/
+
+# Test projects: not published, and excluding them keeps them out of the restore graph.
+Server/Serval.Server.Tests/
+Shared/Serval.Ai.Tests/
+
+# VCS, IDE, OS cruft.
+.git/
+.github/
+**/.claude/
+**/.vs/
+**/.idea/
+**/.DS_Store

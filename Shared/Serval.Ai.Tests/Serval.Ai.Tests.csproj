@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!--
+    Same rule as the other suites: this must run on a fresh clone with no models downloaded and no
+    device attached. That is exactly why the two detection gates are pure and live in
+    Serval.Ai.Core — they are the code that decides whether the expensive models run at
+    all, so they are the code most worth being able to test cheaply.
+
+    One exception, gated the way Serval.Server.Tests gates MaskedTrackingOverVideoTests:
+    ConversationOverFixtureTests runs the real ASR, VAD, embedding and diarization models over
+    known-count audio, and is the only place a transcript is checked together with the speaker it
+    was attributed to. It skips with a reason unless SERVAL_MODELS points at weights, so the rule
+    above still holds on a fresh clone.
+  -->
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <!--
+    Serval.Ai is referenced for the conversation-boundary and WAV-round-trip tests. Referencing it
+    does not drag its native runtimes in at test time: .NET resolves a P/Invoke's library on first
+    call, and nothing here calls one.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="../Serval.Ai/Serval.Ai.csproj" />
+    <ProjectReference Include="../Serval.Ai.Core/Serval.Ai.Core.csproj" />
+    <ProjectReference Include="../Serval.Contracts/Serval.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

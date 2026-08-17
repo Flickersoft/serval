@@ -1,0 +1,74 @@
+# Orange Pi 5 run-on-boot unit.
+#   sudo cp deploy/camera-module.service /etc/systemd/system/
+#   sudo systemctl enable --now camera-module
+#
+# Assumes the published output is in /opt/camera-module with models/ (and, for the NPU vision path,
+# librkllmrt.so + librknnrt.so) alongside it.
+#
+# The pipeline is verified on an RK3588 (audio, speakers, camera, NPU vision), but this unit
+# file itself — the paths, user, and sandboxing below — has not been run as a service yet.
+# Validate it on the Pi before relying on it.
+
+[Unit]
+Description=camera-module — local speech transcription and emotion telemetry
+After=sound.target network.target
+
+[Service]
+# Type=simple, not notify: the host has no sd_notify integration, so notify would hang
+# waiting for a readiness signal that never arrives. Switching to notify requires the
+# Microsoft.Extensions.Hosting.Systemd package and builder.Services.AddSystemd().
+Type=simple
+WorkingDirectory=/opt/camera-module
+ExecStart=/opt/camera-module/camera-module
+Restart=always
+RestartSec=5
+
+# Logs are stdout only — the app writes no log file, because the journal already rotates and caps
+# them (SystemMaxUse= in journald.conf). These match systemd's defaults for Type=simple; they are
+# spelled out so the destination is stated where someone deploying will look.
+#   journalctl -u camera-module -f          follow
+#   journalctl -u camera-module --since -1h recent history
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=camera-module
+
+# The audio group is required for ALSA capture. video (camera) and render (NPU) are needed
+# only when vision is enabled — harmless otherwise.
+User=camera-module
+Group=audio
+SupplementaryGroups=video render
+
+Environment=DOTNET_ENVIRONMENT=Production
+# Pin the capture device: index order is not stable across reboots.
+# Environment=CameraModule__Audio__DeviceName=USB Audio
+# Keep the SD card from filling once records are delivered.
+Environment=CameraModule__Output__DeleteAfterSync=true
+
+# NPU vision (opt-in). LD_LIBRARY_PATH lets librkllmrt.so find librknnrt.so in the app dir;
+# uncomment the two CameraModule__Vision lines to turn it on. Requires the vendor rknpu driver and
+# the RKLLM runtime libs + pre-converted models — see the README's "Vision on the NPU" section.
+Environment=LD_LIBRARY_PATH=/opt/camera-module
+# Environment=CameraModule__Vision__Enabled=true
+# Environment=CameraModule__Vision__UseNpu=true
+
+# Conversation audio (speaker diarization only) in RAM instead of on the SD card. While a
+# conversation is open the WAV grows continuously at ~115 MB/hour, then is deleted once diarized —
+# write-and-delete churn, which is what wears flash. RuntimeDirectory gives us /run/camera-module,
+# which is tmpfs.
+#
+# Off by default because it trades away crash recovery: DiarizationWorker rescues conversations
+# whose audio outlived the process, and tmpfs contents do not survive a reboot or power cut.
+# Also budget for it — MaxConversationMinutes (30) at 16 kHz mono is ~58 MB per camera scope.
+# RuntimeDirectory=camera-module
+# Environment=CameraModule__Speaker__ConversationAudioDirectory=/run/camera-module/conversations
+
+# The outbox and JSONL live here; everything else can be read-only.
+StateDirectory=camera-module
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/opt/camera-module/data
+
+[Install]
+WantedBy=multi-user.target

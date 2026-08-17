@@ -1,0 +1,168 @@
+[
+  {
+    "type": "utterance",
+    "schema_version": 7,
+    "id": "75b4502a-a441-4c64-8311-7b144fe4f6cc",
+    "camera_id": "fixture",
+    "received_at": "2026-01-01T00:00:17.088+00:00",
+    "conversation_id": "7f44d3c8-bdf3-4011-ba09-c51c3b5fd29b",
+    "timestamp": "2026-01-01T00:00:17.088+00:00",
+    "transcript": "YeahAnd you worked on the original computer in this country right I was very fortunate the Navy a to the first big computer in the United States Mark one at Harvard its called Mark one at Harvard Now in those days the thing was 51 feet long, eight feet high and eight feet deep and that was the pocket model.",
+    "language": "en",
+    "emotion": "emo_unknown",
+    "audio_event": "speech",
+    "duration_seconds": 16.956,
+    "speaker": "speaker_0",
+    "speaker_source": "live",
+    "source": "server"
+  },
+  {
+    "type": "utterance",
+    "schema_version": 7,
+    "id": "1e6da3c2-fcaf-4444-bb42-b556c545b499",
+    "camera_id": "fixture",
+    "received_at": "2026-01-01T00:00:29.408+00:00",
+    "conversation_id": "7f44d3c8-bdf3-4011-ba09-c51c3b5fd29b",
+    "timestamp": "2026-01-01T00:00:29.408+00:00",
+    "transcript": "you could put it on a little tiny corner of a chip now now how did you know so much about computers then I didn't did the first one.",
+    "language": "en",
+    "emotion": "emo_unknown",
+    "audio_event": "speech",
+    "duration_seconds": 11.494,
+    "speaker": "speaker_0",
+    "speaker_source": "live",
+    "source": "server"
+  },
+  {
+    "type": "diarization",
+    "schema_version": 7,
+    "conversation_id": "7f44d3c8-bdf3-4011-ba09-c51c3b5fd29b",
+    "started_at": "2025-12-31T23:59:59.4320001+00:00",
+    "audio_seconds": 30.98,
+    "speaker_count": 2,
+    "segments": [
+      {
+        "start": 0.031,
+        "end": 2.765,
+        "speaker": 0
+      },
+      {
+        "start": 2.765,
+        "end": 7.81,
+        "speaker": 1
+      },
+      {
+        "start": 7.844,
+        "end": 11.118,
+        "speaker": 0
+      },
+      {
+        "start": 11.287,
+        "end": 13.919,
+        "speaker": 1
+      },
+      {
+        "start": 13.953,
+        "end": 16.855,
+        "speaker": 0
+      },
+      {
+        "start": 17.783,
+        "end": 18.357,
+        "speaker": 1
+      },
+      {
+        "start": 18.357,
+        "end": 19.201,
+        "speaker": 0
+      },
+      {
+        "start": 18.948,
+        "end": 21.682,
+        "speaker": 1
+      },
+      {
+        "start": 21.682,
+        "end": 28.027,
+        "speaker": 0
+      }
+    ],
+    "source": "server"
+  },
+  {
+    "type": "conversation_transcript",
+    "schema_version": 7,
+    "conversation_id": "7f44d3c8-bdf3-4011-ba09-c51c3b5fd29b",
+    "started_at": "2025-12-31T23:59:59.4320001+00:00",
+    "audio_seconds": 30.98,
+    "speaker_count": 2,
+    "text": "Yeah, and you worked on the original computer in this country, right? I was very fortunate the Navy a to the first big computer in the United States, Mark one at Harvard. It's called Mark one at Harvard in those days the thing was. 51 feet long,8 feet high and 8 feet deep. And that was the pocket model. That's right. U. You could put it on a little tiny corner of a chip now. Now how did you know so much about computers then, I didn't the first one?",
+    "turns": [
+      {
+        "start": 0.031,
+        "end": 2.765,
+        "speaker": 0,
+        "text": "Yeah, and you worked on the original computer in this country, right?",
+        "emotion": "emo_unknown"
+      },
+      {
+        "start": 2.765,
+        "end": 7.81,
+        "speaker": 1,
+        "text": "I was very fortunate the Navy a to the first big computer in the United States, Mark one at Harvard.",
+        "emotion": "emo_unknown"
+      },
+      {
+        "start": 7.844,
+        "end": 11.118,
+        "speaker": 0,
+        "text": "It's called Mark one at Harvard in those days the thing was.",
+        "emotion": "emo_unknown"
+      },
+      {
+        "start": 11.287,
+        "end": 13.919,
+        "speaker": 1,
+        "text": "51 feet long,8 feet high and 8 feet deep.",
+        "emotion": "emo_unknown"
+      },
+      {
+        "start": 13.953,
+        "end": 16.855,
+        "speaker": 0,
+        "text": "And that was the pocket model.",
+        "emotion": "emo_unknown"
+      },
+      {
+        "start": 17.783,
+        "end": 18.357,
+        "speaker": 1,
+        "text": "That's right.",
+        "emotion": "emo_unknown"
+      },
+      {
+        "start": 18.357,
+        "end": 19.201,
+        "speaker": 0,
+        "text": "U.",
+        "emotion": "emo_unknown"
+      },
+      {
+        "start": 18.948,
+        "end": 21.682,
+        "speaker": 1,
+        "text": "You could put it on a little tiny corner of a chip now.",
+        "emotion": "emo_unknown"
+      },
+      {
+        "start": 21.682,
+        "end": 28.027,
+        "speaker": 0,
+        "text": "Now how did you know so much about computers then, I didn't the first one?",
+        "emotion": "emo_unknown"
+      }
+    ],
+    "retranscribed_turns": 9,
+    "source": "server"
+  }
+]

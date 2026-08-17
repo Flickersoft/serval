@@ -1,0 +1,101 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Serval.Ai</RootNamespace>
+    <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Serval.Ai.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Serval.Ai.Core/Serval.Ai.Core.csproj" />
+    <ProjectReference Include="../Serval.Contracts/Serval.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.9" />
+  </ItemGroup>
+
+  <!--
+    Vision. LLamaSharp.Backend.Cpu carries llama.cpp + libmtmd for linux-x64 AND linux-arm64,
+    so Qwen3-VL runs in-process on the desktop, the Pi, and the Server from one code path.
+
+    Vulkan is opt-in via -p:LlamaBackend=Vulkan, which the Server's Dockerfile passes so the
+    container can offload to an AMD/Intel GPU (see VisionOptions.GpuLayers). It is NOT the
+    default: LLamaSharp.Backend.Vulkan.Linux ships linux-x64 only, so making it unconditional
+    would break the linux-arm64 CameraModule.
+
+    Vulkan does not replace Cpu, it adds to it — LLamaSharp.Backend.Vulkan.Linux takes a
+    dependency on LLamaSharp.Backend.Cpu, so the publish carries both runtimes/linux-x64/native/
+    vulkan/ and the avx* variants, and llama.cpp falls back to the CPU when no Vulkan device is
+    usable. A container without /dev/dri therefore still runs, just on the CPU. That means the
+    Cpu PackageReference below is redundant in the Vulkan configuration and only load-bearing
+    for arm64 — the condition is kept for clarity about which build gets what.
+  -->
+  <PropertyGroup>
+    <LlamaBackend Condition="'$(LlamaBackend)' == ''">Cpu</LlamaBackend>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LLamaSharp" Version="0.27.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.27.0"
+                     Condition="'$(LlamaBackend)' == 'Cpu'" />
+    <PackageReference Include="LLamaSharp.Backend.Vulkan" Version="0.27.0"
+                     Condition="'$(LlamaBackend)' == 'Vulkan'" />
+  </ItemGroup>
+
+  <!--
+    Pure-managed JPEG decode. Two callers: the NPU vision path (RkllmVisionRunner), which must
+    hand the RKNN encoder raw RGB, and the motion gate, which needs downscaled grayscale. No
+    native dependency (unlike OpenCvSharp, which we avoid because it has no linux-arm64 runtime),
+    so it behaves identically on the desktop, the Pi and in the Server's container.
+  -->
+  <ItemGroup>
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+  </ItemGroup>
+
+  <!--
+    SenseVoice does ASR + speech emotion + audio events in one pass, on both
+    linux-x64 and linux-arm64 (RK3588). Version is pinned exactly: SenseVoiceInterop
+    mirrors the native SherpaOnnxOfflineRecognizerResult struct layout to reach the
+    emotion field, which the managed wrapper does not expose. Bumping this version
+    requires re-checking that struct against c-api.h.
+  -->
+  <ItemGroup>
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="[1.13.4]" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.linux-x64" Version="[1.13.4]" Condition="'$(RuntimeIdentifier)' == 'linux-x64' Or '$(RuntimeIdentifier)' == ''" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.linux-arm64" Version="[1.13.4]" Condition="'$(RuntimeIdentifier)' == 'linux-arm64'" />
+  </ItemGroup>
+
+  <!--
+    Object detection. This is the *Managed* package — the managed P/Invoke surface with no native
+    assets of its own — and that is load-bearing rather than incidental.
+
+    The full Microsoft.ML.OnnxRuntime package publishes its native to
+    runtimes/linux-x64/native/libonnxruntime.so, which is byte-for-byte where sherpa-onnx publishes
+    its own. The SDK resolves that collision silently, in sherpa's favour or Microsoft's depending
+    on ordering, with no error at any verbosity. Since libsherpa-onnx-c-api.so declares
+    NEEDED libonnxruntime.so with RPATH $ORIGIN, losing that coin toss rebinds the entire ASR path
+    onto a different ONNX Runtime build. Referencing Managed alone means exactly one native ships
+    and DllImport("onnxruntime") resolves to it.
+
+    So the detector runs on sherpa's ONNX Runtime 1.27.0 (Managed 1.27.1 is API-compatible with it),
+    which ties the two together: bumping the sherpa pin above means re-checking this still loads,
+    and it fixes the detector to the CPU execution provider, because that build carries no others.
+    A GPU provider means a purpose-built libonnxruntime.so on the image and
+    DetectionOptions.NativeLibraryPath pointing at it, not a different package here.
+
+    Version is pinned exactly, for the same reason the sherpa pin below is.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="[1.27.1]" />
+  </ItemGroup>
+
+</Project>

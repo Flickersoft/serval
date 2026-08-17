@@ -1,0 +1,187 @@
+# The gate a pull request has to pass — the checks CONTRIBUTING.md asks a contributor to run, on a
+# machine carrying none of a developer's history.
+#
+# Nothing here needs a model, a camera, a database or a network service. Every suite in this
+# repository is written to skip what it cannot reach (Docs/testing.md), which is what makes a bare
+# runner a fair judge of it and what keeps this workflow to two jobs and no setup.
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  # Also on main, for a reason that is not redundancy. Actions caches are branch-scoped: a cache
+  # written by a pull request is readable by that pull request alone, so only a run on the default
+  # branch warms the ~250 MB of NuGet natives and the ~1 GB Flutter SDK for every pull request that
+  # follows. It also gates the merged tree, which is not the tree that was proposed.
+  push:
+    branches: [main]
+
+# No paths: filters, deliberately. A workflow skipped by a path filter creates no check run at all,
+# so a required status check of that name sits at "waiting for status to be reported" and the merge
+# button never unblocks — the filter and branch protection disagree, and the pull request loses. The
+# whole gate is minutes; buying three of them back on App-only changes is not worth that.
+#
+# If it ever becomes worth it, the shape that works is a `changes` job feeding `if:` on the two jobs
+# below, plus a third always-run job that `needs:` both and is what branch protection requires. The
+# rule either way: the required check must be a job that always runs.
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Pull requests only. Pushing a fixup should replace the run it obsoleted rather than queue behind
+  # it — but cancelling a main run would leave the caches above cold, which is the one thing the main
+  # run exists to prevent.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Reads the tree and nothing else. Neither job publishes, comments, tags or pushes.
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    runs-on: ubuntu-latest
+    # A deadlocked await or an unreaped subprocess would otherwise sit for six hours. Roughly four
+    # times a warm run.
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          # There is no global.json, so nothing in the tree names an SDK and this line is the only
+          # place CI's version is decided. Held to the 10.0 band because every project targets
+          # net10.0 and Serval.slnx is an .slnx, which needs 9.0.200 or later to load at all. The
+          # patch floats so servicing fixes arrive without a commit.
+          dotnet-version: "10.0.x"
+
+      # Most of the restore is native payload that changes only when a version does: LLamaSharp's
+      # llama.cpp build is 129 MB by itself and sherpa-onnx's linux-x64 runtime another 41 MB.
+      #
+      # Every version in this repository is written out in a .csproj — no Directory.Packages.props,
+      # no NuGet.config, no lock file, and not one PackageReference floats — so the restore graph is
+      # a pure function of that set of files, and their hash is an exact key rather than an
+      # approximation of one. The restore-key prefix means a branch that bumps a single package
+      # starts from the previous cache instead of from nothing.
+      #
+      # setup-dotnet's own cache: true is not usable here: it requires packages.lock.json files,
+      # which this repository has none of.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-
+
+      # -warnaserror on the command line rather than TreatWarningsAsErrors in Directory.Build.props.
+      # CONTRIBUTING.md makes a warning-free build a condition of *merging*, not of building, and
+      # this file is where that distinction belongs — a property in Directory.Build.props would break
+      # the local inner loop too, where an unused local halfway through a refactor is information
+      # rather than an error. The switch also reaches further than the property does: the property is
+      # the C# compiler alone, this promotes the NETSDK and MSBuild warnings that a bad reference or
+      # a mistyped property produce.
+      #
+      # The NuGet audit codes are exempted because they are not the author's regression. An advisory
+      # published overnight against a transitive package would otherwise fail every open pull request
+      # for a fix none of them can make. They still arrive — as Dependabot alerts, and as warnings in
+      # this log.
+      - run: dotnet build Serval.slnx -warnaserror "-warnnotaserror:NU1901;NU1902;NU1903;NU1904"
+
+      # --no-build, so this step measures the tests rather than re-proving the build above it and so
+      # a warning cannot be counted twice. The two steps therefore have to stay in the same
+      # configuration — adding -c Release to one alone makes this one fail looking for assemblies
+      # that were never written. Two steps rather than one because the checks list should say which
+      # of "it does not compile" and "it does not work" happened.
+      #
+      # ffmpeg is deliberately not installed on this runner. The video-path suites check for it and
+      # Assert.Skip when it is absent, which is the fresh-clone behaviour Docs/testing.md promises —
+      # and those tests time real subprocesses against three-second windows, which is the one thing a
+      # shared four-core runner is bad at. They still run for anyone who has ffmpeg, which is where
+      # they were going to run anyway. `sudo apt-get install -y ffmpeg` is the whole change if that
+      # trade stops being the right one.
+      - run: dotnet test Serval.slnx --no-build
+
+  flutter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: App/serval_app
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # Exact, not a range, and this is the load-bearing line in the job. Both `dart format`'s
+          # output and the test rasterizer move between SDK versions, so a floating `stable` would
+          # eventually reformat a file nobody touched, or redraw the 28 screenshots under
+          # test/goldens/, and fail a branch that changed neither. 3.44.9 is the SDK those were
+          # baked with, and this line is the record of what the App is built and tested against.
+          #
+          # Server/Serval.Server/Dockerfile pins the same SDK by revision
+          # (6b182d2c7585eba26d4edce0f97630effd256c33, which is this tag) so the shipped web bundle
+          # is built by the SDK that tested it. Bumping one without the other leaves this gate
+          # lying, and a bump also means regenerating test/goldens/ — three files or none.
+          #
+          # Deliberately not read from App/serval_app/.metadata: Flutter writes that on create and
+          # migrate but not on upgrade, so it records the revision the project was created with.
+          flutter-version: 3.44.9
+          channel: stable
+          # The SDK and the pub cache both, from this one input — the action already keys the pub
+          # half on pubspec.lock.
+          cache: true
+
+      # Explicit, though `flutter analyze` and `flutter test` would each run it for themselves: it
+      # splits "the dependencies do not resolve" from "the code does not analyse" into two lines of
+      # this log, and it is what writes .dart_tool/package_config.json, which
+      # test/golden_capture_test.dart reads directly to find the Phosphor glyphs in the pub cache.
+      #
+      # --enforce-lockfile because the goldens were rendered against exactly the versions in
+      # pubspec.lock — phosphor_icons ships the icon font half of those screenshots are drawn with,
+      # and a resolution that quietly drifts is a golden diff with no cause anywhere in the diff. It
+      # also fails a branch that edits pubspec.yaml without committing the regenerated lock, which is
+      # the same statement said earlier.
+      - run: flutter pub get --enforce-lockfile
+
+      # The entire formatting rule. First of the three because it is the cheapest, and because a
+      # branch that has not been formatted has nothing else worth reporting yet.
+      - run: dart format --output=none --set-exit-if-changed .
+
+      # No --fatal-infos: `flutter analyze` already defaults it to true, which is exactly the rule
+      # CONTRIBUTING.md states.
+      - run: flutter analyze
+
+      # No reporter flag either — `flutter test` picks a GitHub Actions reporter on its own when it
+      # sees GITHUB_ACTIONS, which folds each suite into its own group and annotates failures at the
+      # line.
+      - run: flutter test --exclude-tags golden
+
+      # The goldens, held out of the step above so that "the pixels moved" and "the logic broke"
+      # are two different lines in the checks list, and so a failure here can upload the images
+      # below without every other kind of failure dragging an empty artifact along.
+      #
+      # They gate. The SDK pin above is what earns that: both sides get bit-identical Skia, and the
+      # suite loads every font from bytes it controls rather than from the machine, so a runner and
+      # a developer laptop draw the same frame. These are also the only check here that would
+      # notice a phosphor_icons or fl_chart bump quietly redrawing the UI, which is precisely what
+      # dependabot.yml is now proposing weekly.
+      - id: goldens
+        run: flutter test --tags golden
+
+      # The one failure whose evidence cannot be in the log above. A failed golden writes the
+      # expected image, the actual one and an isolated diff into test/failures/ (already gitignored),
+      # and those three PNGs are the only way to tell "the design changed" from "this machine draws
+      # text a hair differently".
+      #
+      # Path is from the workspace root, not from the working-directory above — upload-artifact is
+      # not a `run` step.
+      #
+      # failure() is load-bearing, not decoration: a step whose `if` does not call one of the status
+      # functions carries an implicit success(), so once the goldens gate rather than warn this step
+      # would be skipped by the very failure it exists to explain.
+      - if: failure() && steps.goldens.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: golden-failures
+          path: App/serval_app/test/failures/
+          if-no-files-found: ignore
+          retention-days: 7

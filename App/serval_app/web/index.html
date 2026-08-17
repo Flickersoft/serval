@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="Serval camera dashboard.">
+
+  <!--
+    Without this a phone browser lays the page out at its ~980px fallback viewport, which is wider
+    than `Serval.compactWidth` — so `isCompact` is false on an actual phone and none of the compact
+    layouts engage on the one device they were drawn for. They only appear under devtools emulation,
+    which sets the viewport itself.
+
+    `user-scalable=no` because the app does its own zooming: pinching a camera magnifies the
+    picture, and a browser page-zoom on top of that is two magnifications fighting over the same
+    two fingers.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="serval">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>serval</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!--
+    hls.js, for replaying a recording. Chrome cannot play an HLS playlist from a <video> element
+    on its own — only Safari can — so the scrubber's playback goes through Media Source
+    Extensions, and this is the library that drives it. See lib/playback/vod_player_web.dart.
+
+    Vendored rather than fetched from a CDN, for the same reason assets/fonts/ is: an offline run
+    should still work, and a page that silently loses its player when a CDN is unreachable is a
+    page that is broken in a way nobody can diagnose. This is the "light" build — one rendition,
+    no alternate audio or subtitle tracks, which is all a single-camera recording has.
+
+    v1.6.16, Apache-2.0; the banner at the top of hls.js carries the notice, and
+    THIRD_PARTY_LICENSES.md lists it. Dependabot does not watch vendored files, so nothing here
+    will ever tell you this has gone stale — updating is manual: download hls.light.min.js from
+    the release, save it as hls.js, re-apply that banner, and delete the sourceMappingURL line the
+    dist build ends with (the .map is not vendored, so it only 404s).
+  -->
+  <script src="hls.js"></script>
+</head>
+<body>
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

@@ -1,0 +1,82 @@
+# The issue-first conversation CONTRIBUTING.md asks for before substantial work. The questions are
+# in the order that conversation actually needs them: what you are trying to do first, what you
+# would change second — a proposal that opens with the change tends to hide the problem it solves.
+
+name: Feature or change proposal
+description: Something Serval should do, or should do differently
+title: "[Proposal] "
+labels: ["enhancement"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Much of Serval is shaped by constraints that are not visible from the code — what a camera
+        will actually give you over ONVIF, what the detection gates cost per frame, why the settings
+        catalogue lives on the Server. This issue is that conversation, and it saves rework.
+
+        A typo, a broken link or an obvious bug does not need one — send a pull request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that Serval does not let you do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would change
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Server
+        - CameraModule
+        - App
+        - Deployment / compose
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you have already tried, or considered and rejected
+      description: Including anything about the current design that made this harder than expected.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: implementing
+    attributes:
+      label: Do you intend to implement this?
+      options:
+        - "Yes"
+        - Yes, with some guidance on where to start
+        - "No"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues for this.
+          required: true
+        - label: >-
+            I read [What's missing](https://github.com/Flickersoft/Serval#whats-missing) — the
+            honest list of what does not work yet.
+          required: true
+        - label: >-
+            If I implement this, I understand a first pull request needs the
+            [CLA](https://github.com/Flickersoft/Serval/blob/main/CLA.md), which grants Flickersoft
+            LLC the right to sublicense contributed code.
+          required: false

@@ -1,0 +1,103 @@
+name: serval_app
+description: "Serval client app."
+repository: https://github.com/Flickersoft/Serval
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # For `usePathUrlStrategy` only, reached through lib/router/url_strategy.dart's conditional
+  # import — it ships with the SDK and pulls nothing, but it cannot be imported off web.
+  flutter_web_plugins:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  shared_preferences: ^2.5.5
+  phosphor_icons: ^3.0.1
+
+  # The Server: `http` for REST, `web_socket_channel` for the two push feeds, `flutter_webrtc`
+  # for the focused live view (also the only path talk-back can take — the microphone rides the
+  # same SDP offer the video is negotiated with).
+  http: ^1.5.0
+
+  # SHA-256, for naming this browser's push subscription: a subscription's id is the hash of its
+  # endpoint, so nothing has to be stored to survive cleared storage.
+  crypto: ^3.0.7
+
+  # Where a saved snapshot or clip lands on desktop. No web implementation, so it is reached
+  # through a conditional import exactly as lib/playback/ does for the two players.
+  path_provider: ^2.1.5
+
+  # Handing a saved clip to the platform's share sheet, through the same conditional-import seam
+  # as the saver: on web it is navigator.share, and a Linux desktop reports that it has no sheet.
+  share_plus: ^13.3.0
+  web_socket_channel: ^3.0.3
+  flutter_webrtc: ^1.5.2
+
+  # Replay. The live view is WebRTC, but a recording is an HLS VOD playlist, which
+  # `flutter_webrtc` cannot play — so the scrubber needs a second player.
+  media_kit: ^1.2.6
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.7
+
+  # `dart:js_interop` bindings for the `<video>` element the web player drives.
+  web: ^1.1.0
+  flutter_svg: ^2.3.0
+  flutter_secure_storage: ^11.0.0
+
+  # Dependency injection, and nothing more ambitious than that — see lib/data/providers.dart for
+  # what is and is not in the container, and why widgets/ stays prop-driven.
+  flutter_riverpod: ^3.4.2
+
+  # Real URLs on the web build: linkable routes, reload that lands where you were, a back button
+  # that stays in the app. The route tree is in lib/router/.
+  go_router: ^17.3.0
+
+  # The sparklines under the vitals meters. The one property this chart cannot get wrong is the
+  # fiddly one: a sample the Server could not measure has to be a *break* in the line, never a dip
+  # to zero, and `FlSpot.nullSpot` is exactly that with the painter's own tests behind it.
+  fl_chart: ^1.2.0
+  url_launcher: ^6.3.2
+
+  # Choosing a configuration backup to restore. `withData: true` yields bytes on native and web
+  # alike, so restoring takes one path where saving needs one per platform. Its constraints pin a
+  # few transitive Windows-only packages to older versions — the reason `pub outdated` has
+  # opinions — but none of those paths are taken on web or Linux.
+  file_picker: ^12.0.0-beta.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  # The Serval brand mark used in the nav rail and (rasterized) as the app/window icon.
+  assets:
+    - assets/icons/
+
+  # Vendored rather than fetched at runtime so an offline desktop run still renders the design:
+  # Inter for headings and body, JetBrains Mono for kickers, timestamps and telemetry labels.
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-400.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-500.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-600.ttf
+          weight: 600
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMono-400.ttf
+          weight: 400
+        - asset: assets/fonts/JetBrainsMono-500.ttf
+          weight: 500

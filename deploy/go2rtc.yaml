@@ -1,0 +1,16 @@
+# go2rtc sidecar — serves the low-latency WebRTC focused live view only. Streams are added at
+# runtime by the Server (Go2RtcSyncWorker mirrors the camera registry via the API), so none are
+# listed statically here. go2rtc pulls each camera's RTSP lazily, only while a viewer is connected.
+#
+# This file needs no editing. The one per-host value — the WebRTC candidate address(es) the
+# browser is told to connect to — comes from SERVAL_WEBRTC_CANDIDATES in .env, merged in on the
+# go2rtc command line by docker-compose.yml.
+
+api:
+  listen: ":1984"          # the Server reaches this for stream reconcile + SDP signaling
+
+webrtc:
+  listen: ":8666"          # TCP/UDP port the browser connects to for WebRTC media (SRTP)
+
+log:
+  level: info

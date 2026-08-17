@@ -1,0 +1,77 @@
+{
+  "sampledAt": "2026-08-03T19:05:52.5658647+00:00",
+  "processUptimeSeconds": 16.010771,
+  "cpu": {
+    "containerPercent": 4.482396875,
+    "hostPercent": 4.61321198807469,
+    "cores": 32,
+    "quotaCores": null,
+    "loadAverage": [
+      4.69,
+      4.86,
+      4.36
+    ],
+    "unavailableReason": null
+  },
+  "memory": {
+    "usedBytes": null,
+    "limitBytes": null,
+    "percent": null,
+    "unavailableReason": "This host publishes no cgroup v2 memory accounting."
+  },
+  "gpu": {
+    "busyPercent": 0,
+    "driver": "amdgpu",
+    "renderNode": "renderD129",
+    "vramUsedBytes": 49463296,
+    "vramTotalBytes": 536870912,
+    "hostWide": true,
+    "unavailableReason": null
+  },
+  "disk": {
+    "mountPoint": "/tmp",
+    "totalBytes": 67058184192,
+    "freeBytes": 61561434112,
+    "usedBytes": 5496750080,
+    "mediaBytes": 13926400,
+    "scannedAt": "2026-08-03T19:05:48.5670597+00:00",
+    "scanSeconds": 0.0000677,
+    "cameras": [
+      {
+        "cameraId": "front-door",
+        "label": "Front door",
+        "bytes": 10342400,
+        "fileCount": 6,
+        "oldestSegmentAt": "2026-07-27T19:01:25.665+00:00",
+        "retentionDays": 14,
+        "bytesPerDay": 1476863.2638688656
+      },
+      {
+        "cameraId": "driveway",
+        "label": "Driveway",
+        "bytes": 3072000,
+        "fileCount": 3,
+        "oldestSegmentAt": "2026-07-30T19:01:25.665+00:00",
+        "retentionDays": 14,
+        "bytesPerDay": 767425.0905825238
+      },
+      {
+        "cameraId": null,
+        "label": "conversations",
+        "bytes": 512000,
+        "fileCount": 1,
+        "oldestSegmentAt": null,
+        "retentionDays": null,
+        "bytesPerDay": null
+      }
+    ],
+    "unavailableReason": null
+  },
+  "alerts": [
+    {
+      "kind": "diskLow",
+      "severity": "warning",
+      "message": "Under 99% free on /tmp. Nothing deletes footage early to make room, so this only goes one way."
+    }
+  ]
+}

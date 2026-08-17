@@ -1,0 +1,6 @@
+bin/
+obj/
+
+# The detection models are fetched by CameraModule/Serval.CameraModule/scripts/fetch-models.sh
+# and pointed at by config from whichever host is running — nothing here downloads its own copy.
+models/

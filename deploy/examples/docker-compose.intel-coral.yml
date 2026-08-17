@@ -1,0 +1,254 @@
+# Serval Server for a small x86 host with Coral Edge TPUs. Written against an Intel N100 — 4 cores,
+# 16 GB of single-channel memory, two USB Corals, one iGPU, and a separate storage disk — which is the
+# class of box every measurement in this file was taken on.
+#
+# A sibling of docker-compose.amd-gpu.yml, not a replacement for it. Both are supported deployments,
+# and **both run the same image** — the Edge TPU libraries ship in it and stay inert until
+# Detection:Device selects them. So everything that differs between the two hosts is either a setting
+# or a hardware passthrough, which is exactly what a compose file is for:
+#
+#   * Detection runs on the Corals rather than the CPU, which is the whole point: it leaves the four
+#     Gracemont cores to ffmpeg and the vision model. Measured 110/s idle, ~65/s under full load,
+#     against an estimated 10-13/s for these cores on the ONNX path.
+#   * The USB bus is passed through and its device cgroup opened. Nothing else needs that, and it is
+#     the one thing here that genuinely cannot be a setting.
+#   * The whole-frame detection pass is tiled, because one fixed 320x320 input shrinks a 32:9 frame to
+#     28% picture and covering a frame is not the same as examining it.
+#   * Thread counts come down hard. Eight vision threads is right for an eight-core part and wrong
+#     here — llama.cpp saturating four cores starves the VAD thread, and that shows up as dropped
+#     audio samples rather than as slow vision.
+#
+# Everything specific to one machine is listed under "HOST-SPECIFIC" below. Read that first.
+#
+# The detector needs TWO files that fetch-models.sh does not download: an edgetpu_compiler output and
+# ITS OWN labels file. A COCO-90 accelerator model spells the classes the same as COCO-80 but numbers
+# them differently, so the labels file has to travel with the weights or every class is renamed to its
+# neighbour. See Docs/coral.md.
+
+services:
+  server:
+    image: ghcr.io/flickersoft/serval-server:latest
+    pull_policy: always
+    depends_on:
+      - mongo
+      - go2rtc
+    ports:
+      - "8080:8080"
+    environment:
+      Serval__Mongo__ConnectionString: mongodb://mongo:27017
+      Serval__Mongo__Database: serval
+      Serval__Media__Root: /media
+
+      # HOST-SPECIFIC: secrets. `openssl rand -base64 32` for the signing key. The server refuses to
+      # start while either auth value still reads CHANGE-ME.
+      Serval__ApiKey: "CHANGE-ME"
+      Serval__Auth__SigningKey: "CHANGE-ME"
+      # First run only, and only while the Users collection is empty — ignored on every later restart
+      # whether or not it is still set. Change the password from the app once logged in.
+      Serval__Auth__BootstrapAdminUsername: "admin"
+      Serval__Auth__BootstrapAdminPassword: "CHANGE-ME"
+
+      # HOST-SPECIFIC: sized to the storage disk. Retention is by age only with no size cap, and six
+      # cameras recording main streams is roughly 300-400 GB a day — so this number and the disk behind
+      # /media have to be chosen together. 7 days needs about 2.5 TB.
+      Serval__Media__RetentionDays: "7"
+
+      # --- Video encode: Intel VAAPI on the iGPU -------------------------------------------
+      # Idle on a stack that only records, since nothing is transcoded unless a camera's record
+      # stream asks for it. Set because what the part can encode is worth having settled before a
+      # camera asks: Alder Lake-N does H.264 and HEVC, and decodes AV1 and VP9 without being able to
+      # encode either — AV1 encode arrived with Arc. Asking for one it lacks is rejected at the API,
+      # naming the missing encoder, instead of failing inside ffmpeg per camera at runtime.
+      #
+      # /dev/dri is already passed through below for the vision model's Vulkan offload, so this adds
+      # no passthrough of its own. It also gives GpuSysfs its first candidate for vitals, though on a
+      # single-GPU box that changes nothing. Whether the status page shows a GPU figure at all is a
+      # separate question, answered by the cap_add block further down.
+      Serval__Ingest__HwAccelDevice: /dev/dri/renderD128
+
+      # --- detection on the Corals ---------------------------------------------------------
+      # Two switches, and both are required. ServerAi is the master — off by default, because a server
+      # that only records should not load weights it never uses — and Detection is the vision half of
+      # it. Setting only the second starts a server that logs nothing about detection at all, which is
+      # a confusing five minutes.
+      Serval__ServerAi__Enabled: "true"
+      Serval__Ai__Detection__Enabled: "true"
+
+      # Names the runtime and the silicon together, and a missing device stops the server rather than
+      # quietly falling back to running a CPU model on four cores — which would look healthy on the
+      # status page while delivering a fraction of the throughput. The "tflite-" half also says how
+      # the model file below is read, so the two move together.
+      Serval__Ai__Detection__Device: "tflite-edgetpu"
+      # YOLOv9-s at 512, decoded by the yolo/dfl head. Preferred over the SSD MobileDet that Coral
+      # deployments usually start from: tested on this hardware against a 6-camera site, the SSD read a
+      # static garden ornament as a person once regions shrank past 0.75x, missed a domestic cat it was
+      # given a clear look at while returning three phantom people beside it, and produced 46 boxes on
+      # an empty room including 12 phantom people. YOLOv9-s 512 found the cat, scored a parked car
+      # higher, and never read the ornament as a person at any region shape tried.
+      #
+      # Costs less than it looks. Measured 17.4-28.1/s here against the SSD's own 32.5-52.9/s over five
+      # runs, so the gap is smaller than either model's run-to-run spread. The 320 variant is faster
+      # still (48.3/s) but missed the cat, which is the wrong way to be cheap.
+      #
+      # THE LABELS FILE MOVES WITH THE MODEL. These weights are 17 classes — a COCO subset of people,
+      # vehicles and animals — where the SSD and EfficientDet-Lite models are COCO-90. All eight
+      # DefaultClasses are in the 17. Pointing this head at a 90-entry list is refused at load, because
+      # it declares its own class count; the reverse pairing is silently wrong forever.
+      #
+      # Weights: dbro/frigate-detector-edgetpu-yolo9 v1.5, free and pre-compiled. See Docs/coral.md.
+      Serval__Ai__Detection__ModelPath: /app/models/detect/yolov9-s-relu6-tpumax_512_int8_edgetpu.tflite
+      Serval__Ai__Detection__LabelsPath: /app/models/detect/labels-coco17.txt
+      # MaxConcurrency is deliberately absent: the EdgeTPU runtime reports one lane per device and
+      # ignores it, because an Edge TPU runs one inference at a time.
+      #
+      # Per model, and worth deriving per model. An SSD needs this well above the 0.25 default because
+      # its head returns full row capacity every frame and scores spurious rows to 0.29 on a *blank*
+      # frame. The YOLO head has no such floor but scores more conservatively, so a value inherited
+      # from an SSD is more likely too high than too low — a correctly-identified cat scored 0.44
+      # against this 0.40. Derive it from frames across the day's light, not from one fixture.
+      Serval__Ai__Detection__ScoreThreshold: "0.40"
+
+      # An EdgeTPU graph is compiled for one shape, so every camera shares it and a wide frame is
+      # squeezed hard. Tiling sweeps native-scale tiles instead of one shrunken whole-frame look, at one
+      # tile per frame so the guaranteed cost stays flat. Off by default and left off on hosts without
+      # an accelerator.
+      #
+      # Which cameras qualify depends on the input size, and a LARGER input can switch this off. At 320
+      # a 640x360 stream sits at exactly the 2.0x threshold and tiles; at 512 it arrives at 0.80x, a
+      # 1.3x gain that is under both this threshold and the one enabling region crops at all, so it
+      # takes a single whole-frame pass instead. Measured across a 6-camera site, that moved reserved
+      # tile work from about 12/s to about 3/s.
+      #
+      # The catch: a camera with crops off runs its whole-frame pass EVERY frame, and that pass is
+      # Floor, which InferenceScheduler never sheds. Cheaper in total, less sheddable under pressure.
+      Serval__Ai__Detection__Regions__TiledFloor: "true"
+
+      # Regions__MinRegionScale is left at its 0.5 default here on purpose. 0.75 was measured as the
+      # loosest scale a 320x320 SSD read a static ornament correctly at — 0.66 failed one frame in six,
+      # 0.60 four, 0.50 two, not monotonic — but that number belongs to that model. The YOLOv9 head
+      # above never mistook the same object at any scale, so tightening the bound for it would cost
+      # inference and buy nothing. Re-measure on any model swap rather than carrying a value across.
+
+      # --- the vision model, on the iGPU ---------------------------------------------------
+      Serval__Ai__Vision__Enabled: "true"
+      # On, where the amd-gpu example leaves these commented: with detection on the Corals, nothing else wants the
+      # 24 EUs. Confirmed engaged by "CLIP using Vulkan0 backend" in the log, and by the process
+      # dropping from ~280% to ~90% CPU. Set both or neither — offloading the layers while leaving the
+      # projector on the CPU spends the GPU's memory and keeps the slow half on the CPU.
+      #
+      # Expect worse description latency than an APU regardless. This chip's iGPU shares a SINGLE
+      # memory channel with the CPU and cannot be given more, and token generation is bandwidth-bound.
+      # That is a bus fact, not a tuning problem.
+      Serval__Ai__Vision__GpuLayers: "99"
+      Serval__Ai__Vision__ProjectorOnGpu: "true"
+      # Four cores total. llama.cpp takes whatever it is given, and taking all of them starves the
+      # audio path.
+      Serval__Ai__Vision__NumThreads: "3"
+      Serval__Ai__Asr__NumThreads: "2"
+      # Pin the language where the site has one; SenseVoice's "auto" misreads short English utterances.
+      Serval__Ai__Asr__Language: "en"
+
+      # --- the audio models, on the CPU ----------------------------------------------------
+      # Both default off and both are on in docker-compose.amd-gpu.yml, so omitting them here made
+      # this stack quietly deaf in two ways while a camera's AiAudio flag said otherwise. They cost
+      # CPU rather than Coral, which is the resource this host is short of — but they are small
+      # against the vision model, and they only run on an utterance.
+      Serval__Ai__Speaker__Enabled: "true"
+      # A camera that hears breaking glass or an alarm is most of the point of one.
+      Serval__Ai__Sound__Enabled: "true"
+
+      # --- WebRTC live view ----------------------------------------------------------------
+      Serval__WebRtc__Enabled: "true"
+      Serval__WebRtc__Go2RtcUrl: http://go2rtc:1984
+    volumes:
+      # HOST-SPECIFIC: /mnt/storage is the separate storage disk. Recordings, snapshots and
+      # conversation audio all land here, and it needs the capacity — the boot NVMe does not have it.
+      - /mnt/storage:/media
+      # HOST-SPECIFIC: ~3.4 GB of weights, never baked into the image. Read-only.
+      - /mnt/storage/models:/app/models:ro
+    # Detection's raw frames, in memory rather than on disk: tens of MB a second of write-then-delete,
+    # none of which survives a restart or is worth a snapshot.
+    tmpfs:
+      - /dev/shm/serval:size=256m
+    devices:
+      - /dev/dri:/dev/dri                  # VAAPI encode + Vulkan for the vision model
+      # The whole USB bus tree, not a per-device node, and this is not laziness. A Coral enumerates
+      # as 1a6e:089a, and libedgetpu uploads its firmware on first open — after which it
+      # re-enumerates as 18d1:9302 with a NEW device number. So /dev/bus/usb/001/004 works for
+      # exactly one inference and is then a stale path. Every guide that pins one is wrong.
+      - /dev/bus/usb:/dev/bus/usb
+    # And this line is the one everybody omits. Bind-mounting the bus tree gives the container the
+    # device *nodes* across re-enumeration, but the device cgroup still denies unlisted minors, so
+    # access to the newly-numbered node fails with EPERM. Symptom without it: libedgetpu reports
+    # "Failed to open device" while `ls /dev/bus/usb` plainly shows the node.
+    #
+    # 189 is usb-device. Not `privileged: true`, which most Coral guides reach for and which hands
+    # the container the host. Passing the bus wholesale does let this container talk to every USB
+    # device, which is acceptable only because it already runs as root — the marginal privilege is
+    # small, and the base image's USER comment reasons about exactly this trade.
+    device_cgroup_rules:
+      - "c 189:* rmw"
+    # Uncomment for GPU utilisation on the status page. Optional, and off by default because it is a
+    # capability rather than a setting — the page reads "not reported" without it and says so.
+    #
+    # i915 publishes no busy-percent file the way amdgpu does. What it publishes is a set of perf
+    # counters, one per engine, holding the nanoseconds each has been busy — the same numbers
+    # intel_gpu_top shows. Everything needed to open one is already readable here; the syscall is
+    # not. These are system-wide counters, and a kernel at the default perf_event_paranoid of 2
+    # refuses those without CAP_PERFMON. Docker's default seccomp profile gates perf_event_open
+    # behind the same capability, so this one line answers both.
+    #
+    # What it grants: reading performance counters for the whole machine. Not device access, not
+    # filesystem access, and not CAP_SYS_ADMIN, which is what older guides reach for. What it costs
+    # in privacy terms is that the container can observe host-wide activity through those counters.
+    #
+    # Requires recreating the container, not restarting it: `docker compose up -d --force-recreate server`.
+    # cap_add:
+    #   - PERFMON
+    # 16 GB host. Measured working set is 6.0 GB and flat: 2.3 GB in the process, plus 3.7 GB of
+    # shmem that the process does not map — i915 charges the Vulkan offload's buffers to whichever
+    # cgroup allocated them, so with GpuLayers set the weights, projector and KV cache land here
+    # rather than anywhere in Serval's address space. amdgpu accounts the same allocation elsewhere,
+    # which is why the amd-gpu host's cgroup shows 60 MiB of shmem for the same model and settings.
+    #
+    # So 10g is ~4 GB of headroom, not the 8 GB the process figures suggest. The rest of the limit
+    # fills with page cache from recording writes and is reclaimed continuously — healthy, and the
+    # reason SystemStatsCollector reports the working set rather than memory.current.
+    mem_limit: 10g
+    restart: unless-stopped
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  mongo:
+    image: mongo:8
+    command: ["--wiredTigerCacheSizeGB", "1"]
+    volumes:
+      # HOST-SPECIFIC, and deliberately NOT on the storage disk: the database is small and wants the
+      # IOPS, where recordings want the capacity. This is the boot NVMe.
+      - /srv/serval/mongo:/data/db
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *logging
+
+  # WebRTC media server for the low-latency live view. The Server registers a stream per RTSP camera
+  # at runtime, so none are configured statically — go2rtc pulls a camera's RTSP only while a viewer
+  # is connected and adds no constant load.
+  go2rtc:
+    image: alexxit/go2rtc:1.9.14
+    # All of go2rtc's config inline, so no config file lives on the host at all. HOST-SPECIFIC:
+    # the candidates entry must name THIS box's LAN address, or a browser cannot reach the media
+    # port; comma-separate a second address for access from outside the LAN.
+    command:
+      - go2rtc
+      - -config
+      - "{api: {listen: ':1984'}, webrtc: {listen: ':8666', candidates: [192.168.1.20:8666]}}"
+    ports:
+      - "8666:8666/tcp"     # WebRTC media (also served over UDP)
+      - "8666:8666/udp"
+      # The API (1984) is reached only by the server over the internal network — not published.
+    mem_limit: 512m
+    restart: unless-stopped
+    logging: *logging

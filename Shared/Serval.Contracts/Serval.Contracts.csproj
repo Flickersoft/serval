@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Serval.Contracts</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    The wire contract, and nothing else. Before this project existed the same documents were
+    declared twice — once in the module and once on the server — kept in step only by a comment
+    and two independent test suites that each pinned the same JSON.
+
+    No MongoDB dependency, deliberately: the module must not acquire a database driver just to
+    describe its own output. The server maps these to BSON with class maps in MongoContext
+    instead of attributes.
+  -->
+
+</Project>

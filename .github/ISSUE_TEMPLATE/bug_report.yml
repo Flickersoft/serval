@@ -1,0 +1,124 @@
+# A form rather than a markdown template, because a form can make a field required. CONTRIBUTING.md
+# already says what a bug report needs — version, component, camera make and model, the logs, and
+# the failing ffmpeg command — and this is that list with the parts that cannot be guessed made
+# mandatory rather than suggested.
+#
+# Only `bug` is applied below. A label named here that does not exist on the repository is dropped
+# silently, so anything more specific has to be created first.
+
+name: Bug report
+description: Something in Serval does not work the way it should
+title: "[Bug] "
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report a security vulnerability here.** Serval handles video and audio from
+        inside people's homes. Use the
+        [private security advisory form](https://github.com/Flickersoft/Serval/security/advisories/new)
+        instead — see [SECURITY.md](https://github.com/Flickersoft/Serval/blob/main/.github/SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: Serval version or image tag
+      description: >
+        The running Server names its own commit under the source link in the app. A release tag,
+        an image tag or a commit are all fine.
+      placeholder: v0.1.0, or sha-a1b2c3d
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: They have different trust boundaries and different logs. Pick "Not sure" rather than guessing.
+      options:
+        - Server
+        - CameraModule
+        - App
+        - Deployment / compose
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How it is deployed
+      options:
+        - The deploy/ compose stack
+        - A custom compose file
+        - Built and run from source
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: input
+    id: camera
+    attributes:
+      label: Camera make, model and firmware
+      description: Leave blank if the problem has nothing to do with a camera.
+      placeholder: Reolink RLC-810A, firmware 3.1.0.956
+    validations:
+      required: false
+
+  - type: textarea
+    id: streams
+    attributes:
+      label: Stream details
+      description: >
+        The URL shape **with the credentials removed**, the codecs and resolution, and which roles
+        the stream carries (record, detect, live). Leave blank if not stream-related.
+      placeholder: rtsp://<camera-ip>:554/h264Preview_01_main — H.264 3840x2160, record + detect
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >
+        The logs around the failure, not the whole file. For anything involving a stream, the
+        output of the failing `ffmpeg` command is usually the whole answer.
+      render: shell
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues for this.
+          required: true
+        - label: I removed passwords and credentials from the logs and URLs above.
+          required: true

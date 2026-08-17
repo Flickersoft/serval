@@ -1,0 +1,6 @@
+# Review routing. GitHub requests a review from the owner of every path a pull request touches.
+#
+# This only *requests* — it blocks nothing until a branch protection rule on main turns on
+# "Require review from Code Owners".
+
+* @jeremiah-huston

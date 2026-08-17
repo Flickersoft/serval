@@ -1,0 +1,110 @@
+# Serval Server + MongoDB — the DEVELOPER stack: it builds the image from this working tree.
+# To deploy the released image instead, start from deploy/docker-compose.yml at the repo root.
+#
+# The two rules that matter for this workload (see the deployment notes in the README) are baked
+# in here: named volumes so continuous segment writes and the database never touch the
+# container's overlay layer, and a memory limit per service (plus a WiredTiger cache cap) so
+# neither balloons on a big host.
+#
+# The server image bundles the App's web build too (see Server/Serval.Server/Dockerfile) — once
+# it's up, http://localhost:8080/ is the App itself, same origin as the API, no separate host.
+
+services:
+  server:
+    build:
+      # Repo root: the Server project references ../../Shared/*, which a context rooted at
+      # Serval.Server/ cannot see. Compose resolves `dockerfile` relative to the *context*,
+      # not to this file, so the path is repo-root-relative.
+      context: ..
+      dockerfile: Server/Serval.Server/Dockerfile
+      args:
+        # No GPU assumed for local dev. The published image is built with Vulkan.
+        LLAMA_BACKEND: Cpu
+    depends_on:
+      - mongo
+      - go2rtc
+    ports:
+      - "8080:8080"
+    environment:
+      Serval__Mongo__ConnectionString: mongodb://mongo:27017
+      Serval__Mongo__Database: serval
+      Serval__Media__Root: /media
+      # No codec settings needed: video is recorded exactly as the camera sends it. Re-encoding is
+      # opted into per stream ("transcode" on the camera's record stream), so the hardware setting
+      # below only matters once some camera asks for it.
+      # For hardware encode via VAAPI, uncomment the device mapping below and set:
+      # Serval__Ingest__HwAccelDevice: /dev/dri/renderD128
+      # Low-latency WebRTC live view via the go2rtc sidecar (see the go2rtc service below).
+      Serval__WebRtc__Enabled: "true"
+      Serval__WebRtc__Go2RtcUrl: http://go2rtc:1984
+      # Three values to set before the first `up`. The server refuses to start while any of them is
+      # still CHANGE-ME, so a copied compose file cannot quietly become a deployment anyone holding
+      # this repository can sign an Admin token for:
+      #
+      #   1. Serval__Auth__SigningKey       -> `openssl rand -base64 32`
+      #   2. Serval__Auth__BootstrapAdminPassword -> the first Admin's password, created on first
+      #      boot only; change it later with PUT /api/auth/users/admin.
+      #   3. Serval__ApiKey                 -> only if a CameraModule delivers telemetry here.
+      #      Left unset, that one route rejects every request and nothing else is affected.
+      #
+      # Keep them out of this file on any machine that isn't your own: compose reads a sibling .env,
+      # so `Serval__Auth__SigningKey: ${SERVAL_SIGNING_KEY}` moves the secret out of version control.
+      Serval__Auth__SigningKey: "CHANGE-ME"
+      Serval__Auth__BootstrapAdminUsername: "admin"
+      Serval__Auth__BootstrapAdminPassword: "CHANGE-ME"
+    volumes:
+      - video:/media          # recorded segments, snapshots, live manifests — the big writer
+    # Raw frames on their way to object detection: written by ffmpeg, read and deleted immediately.
+    # Memory rather than disk on purpose — a busy host pushes tens of MB a second through here, and
+    # none of it is worth writing to the device holding the recordings. Only a few frames per camera
+    # are ever resident, so the size is a bound against a stalled reader rather than a working set.
+    tmpfs:
+      - /dev/shm/serval:size=256m
+    # Give the container the GPU for VAAPI hardware encode (Intel/AMD). NVENC needs the NVIDIA
+    # container runtime instead. Software encode needs neither — just more CPU.
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # And separately, GPU utilisation on the status page. amdgpu needs nothing beyond the device
+    # above; Intel reports usage through system-wide perf counters, which need this capability to
+    # open. Without it the page reads "not reported" and names this line. See
+    # deploy/examples/docker-compose.intel-coral.yml.
+    # cap_add:
+    #   - PERFMON
+    mem_limit: 2g
+    restart: unless-stopped
+    # Logs are stdout only — no file sink in the app, because the daemon already rotates. Without
+    # a cap they grow forever on the same host disk the video volume lives on. 10m x 5 = 50 MB.
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  mongo:
+    image: mongo:8
+    command: ["--wiredTigerCacheSizeGB", "1"]  # cap the cache so it doesn't grab host RAM
+    volumes:
+      - mongo-data:/data/db
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *logging
+
+  # WebRTC media server for the low-latency focused live view. The server registers a stream per
+  # RTSP camera at runtime, so no streams are configured statically. go2rtc pulls each camera's
+  # RTSP only while a viewer is connected — it adds no constant load. WebRTC media flows directly
+  # browser ↔ go2rtc (the 8666 port), never through the server.
+  go2rtc:
+    image: alexxit/go2rtc:latest
+    volumes:
+      - ./go2rtc.yaml:/config/go2rtc.yaml:ro
+    ports:
+      - "8666:8666/tcp"     # WebRTC media (also served over UDP)
+      - "8666:8666/udp"
+      # The API (1984) is reached only by the server over the internal network — not published.
+    mem_limit: 512m
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  video:
+  mongo-data:
