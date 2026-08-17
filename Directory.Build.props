@@ -6,7 +6,7 @@
     <Authors>Flickersoft LLC</Authors>
     <Copyright>Copyright (C) 2026 Flickersoft LLC</Copyright>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/Flickersoft/Serval</RepositoryUrl>
+    <RepositoryUrl>https://github.com/Flickersoft/serval</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 

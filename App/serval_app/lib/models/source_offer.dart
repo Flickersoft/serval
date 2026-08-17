@@ -16,7 +16,7 @@
 class SourceOffer {
   const SourceOffer._();
 
-  static const String repositoryUrl = 'https://github.com/Flickersoft/Serval';
+  static const String repositoryUrl = 'https://github.com/Flickersoft/serval';
 
   static const String license = 'AGPL-3.0-or-later';
 

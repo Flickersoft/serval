@@ -181,7 +181,7 @@ the output of the failing `ffmpeg` command is usually the whole answer.
 
 The [bug report form](.github/ISSUE_TEMPLATE/bug_report.yml) asks for exactly that list and will
 not submit without the parts that cannot be guessed, so opening an issue from
-[the chooser](https://github.com/Flickersoft/Serval/issues/new/choose) is the shortest route to a
+[the chooser](https://github.com/Flickersoft/serval/issues/new/choose) is the shortest route to a
 report someone can act on. Proposals have
 [their own form](.github/ISSUE_TEMPLATE/feature_request.yml).
 

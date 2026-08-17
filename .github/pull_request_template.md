@@ -23,5 +23,5 @@ Closes #
       new captures are committed in this branch
 - [ ] `pubspec.lock` is committed alongside any `pubspec.yaml` edit (CI resolves with
       `--enforce-lockfile`)
-- [ ] I have signed the [CLA](https://github.com/Flickersoft/Serval/blob/main/CLA.md), or will when
+- [ ] I have signed the [CLA](https://github.com/Flickersoft/serval/blob/main/CLA.md), or will when
       the bot asks

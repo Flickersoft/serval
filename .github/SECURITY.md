@@ -7,7 +7,7 @@ How to report a vulnerability in Serval, and what happens after you do.
 **Do not open a public issue.** Serval handles video and audio from inside people's homes, and a
 vulnerability disclosed publicly is a vulnerability being exploited.
 
-Report it through [GitHub's private security advisory form](https://github.com/Flickersoft/Serval/security/advisories/new)
+Report it through [GitHub's private security advisory form](https://github.com/Flickersoft/serval/security/advisories/new)
 on this repository. That form is private between you and the maintainers until an advisory is
 published, and it is the only channel — there is no security mailing list.
 

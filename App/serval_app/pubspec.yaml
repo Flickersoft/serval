@@ -1,6 +1,6 @@
 name: serval_app
 description: "Serval client app."
-repository: https://github.com/Flickersoft/Serval
+repository: https://github.com/Flickersoft/serval
 publish_to: 'none'
 
 version: 1.0.0+1

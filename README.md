@@ -72,7 +72,7 @@ SRT). Linux is what is tested, and what the optional GPU and Coral acceleration 
 [Hardware support](#hardware-support). Two minutes to a recording NVR:
 
 ```bash
-git clone --depth 1 https://github.com/Flickersoft/Serval.git
+git clone --depth 1 https://github.com/Flickersoft/serval.git
 cd Serval/deploy
 cp .env.example .env
 # fill in the two secrets in .env — each has its generation command next to it

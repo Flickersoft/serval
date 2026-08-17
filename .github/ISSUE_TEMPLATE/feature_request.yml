@@ -72,11 +72,11 @@ body:
         - label: I searched the existing issues for this.
           required: true
         - label: >-
-            I read [What's missing](https://github.com/Flickersoft/Serval#whats-missing) — the
+            I read [What's missing](https://github.com/Flickersoft/serval#whats-missing) — the
             honest list of what does not work yet.
           required: true
         - label: >-
             If I implement this, I understand a first pull request needs the
-            [CLA](https://github.com/Flickersoft/Serval/blob/main/CLA.md), which grants Flickersoft
+            [CLA](https://github.com/Flickersoft/serval/blob/main/CLA.md), which grants Flickersoft
             LLC the right to sublicense contributed code.
           required: false

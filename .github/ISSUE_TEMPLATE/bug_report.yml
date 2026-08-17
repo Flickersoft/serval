@@ -17,8 +17,8 @@ body:
       value: |
         **Do not report a security vulnerability here.** Serval handles video and audio from
         inside people's homes. Use the
-        [private security advisory form](https://github.com/Flickersoft/Serval/security/advisories/new)
-        instead — see [SECURITY.md](https://github.com/Flickersoft/Serval/blob/main/.github/SECURITY.md).
+        [private security advisory form](https://github.com/Flickersoft/serval/security/advisories/new)
+        instead — see [SECURITY.md](https://github.com/Flickersoft/serval/blob/main/.github/SECURITY.md).
 
   - type: input
     id: version

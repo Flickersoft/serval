@@ -30,7 +30,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          path-to-document: https://github.com/Flickersoft/Serval/blob/main/CLA.md
+          path-to-document: https://github.com/Flickersoft/serval/blob/main/CLA.md
           path-to-signatures: .github/cla-signatures.json
           branch: main
           # The repository owner is a party to the agreement, not a signatory to it.
@@ -38,7 +38,7 @@ jobs:
           custom-notsigned-prcomment: >
             Thanks for the pull request. Serval requires a signed Contributor License Agreement
             before a first contribution can be merged — please read
-            [CLA.md](https://github.com/Flickersoft/Serval/blob/main/CLA.md), then post the
+            [CLA.md](https://github.com/Flickersoft/serval/blob/main/CLA.md), then post the
             following as a comment on this pull request:
           custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
           custom-allsigned-prcomment: "All contributors have signed the CLA."
