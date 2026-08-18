@@ -15,6 +15,9 @@ import 'package:serval_app/data/live_repository.dart';
 import 'package:serval_app/data/sample_repository.dart';
 import 'package:serval_app/data/serval_config.dart';
 import 'package:serval_app/main.dart';
+import 'package:serval_app/models/activity.dart';
+import 'package:serval_app/models/camera.dart';
+import 'package:serval_app/models/timeline.dart';
 import 'package:serval_app/push/push_client.dart';
 import 'package:serval_app/theme/app_theme.dart';
 import 'package:serval_app/theme/serval_tokens.dart';
@@ -99,6 +102,18 @@ void main() {
     await expectLater(
       find.byType(ServalApp),
       matchesGoldenFile('goldens/wall.png'),
+    );
+  });
+
+  // The first screen a new install shows, and the one state the sample content cannot reach:
+  // every other golden here renders six cameras. What it locks is that an empty registry says so
+  // and offers the way out, rather than painting a blank panel over an empty timeline.
+  testWidgets('1f — the wall with no cameras', (tester) async {
+    await tester.pumpWidget(const ServalApp(repository: _EmptyRegistry()));
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byType(ServalApp),
+      matchesGoldenFile('goldens/wall_empty.png'),
     );
   });
 
@@ -452,6 +467,20 @@ void main() {
       );
     });
 
+    // The compact half of 1f. Worth its own capture because the empty state is the one part of
+    // the wall the two layouts do not share a widget for — the phone has no scrubber to hide and
+    // reaches the same panel through `_CompactWall` instead of the tile grid.
+    testWidgets('11d — the wall with no cameras', (tester) async {
+      phone();
+      await tester.pumpWidget(const ServalApp(repository: _EmptyRegistry()));
+      await tester.pumpAndSettle();
+
+      await expectLater(
+        find.byType(ServalApp),
+        matchesGoldenFile('goldens/wall_empty_phone.png'),
+      );
+    });
+
     testWidgets('11c — the wall, the filter as the sheet', (tester) async {
       phone();
       await tester.pumpWidget(const ServalApp());
@@ -731,6 +760,31 @@ Offset _trayTop(WidgetTester tester) => tester
           .first,
     )
     .topCenter;
+
+/// The sample content with its registry emptied, which is what a server nobody has added a camera
+/// to yet returns.
+///
+/// All three overrides are needed, and the third is the one that is easy to miss: an arrangement
+/// outlives the cameras it names, and the activity feed is stored per episode rather than per
+/// camera, so leaving either behind renders a wall that says it has no cameras beside a column of
+/// things those cameras saw.
+class _EmptyRegistry extends SampleServalRepository {
+  const _EmptyRegistry();
+
+  @override
+  List<Camera> cameras() => const [];
+
+  @override
+  List<TileLayout> wallLayout() => const [];
+
+  @override
+  List<ActivityItem> activityFor({
+    String? cameraId,
+    DateTime? asOf,
+    TimelineRange? range,
+    bool includeAllDetections = false,
+  }) => const [];
+}
 
 class _TolerantComparator extends LocalFileComparator {
   _TolerantComparator(super.testFile);

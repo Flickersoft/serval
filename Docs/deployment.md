@@ -152,6 +152,13 @@ docker compose --profile setup run --rm export-detector
 (or `MODEL_DIR=./models ../scripts/export-detector.sh`). Writes `detect/model.onnx` +
 `detect/labels.txt`, ~10 MB. Switch: `Ai__Detection__Enabled`.
 
+Both one-shots run as root — the server image has no unprivileged user — and each gives the
+models directory back to whoever owns it before exiting, including when it fails part-way, so the
+weights stay deletable by the person who fetched them. The one case with no ownership to copy is
+a deployment with no clone at all, where Docker created `./models` as root: set
+`MODEL_UID`/`MODEL_GID` in `.env` (your `id -u`/`id -g`). Running either script natively rather
+than through compose already writes as you, and the handback is skipped.
+
 **3. Flip the switches** — in the quickstart compose they are a commented block — and recreate:
 
 ```bash

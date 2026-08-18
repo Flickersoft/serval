@@ -171,6 +171,12 @@ services:
     entrypoint: ["bash", "/app/fetch-models.sh"]
     environment:
       MODEL_DIR: /models
+      # Who owns the weights once this finishes. Empty is the normal case: the script copies the
+      # ownership of ./models, which a clone created as yours. Set them in .env only where
+      # ./models was created by Docker rather than by a clone, and so is root-owned with no
+      # ownership worth copying.
+      MODEL_UID: ${MODEL_UID:-}
+      MODEL_GID: ${MODEL_GID:-}
       SKIP_VISION: ${SKIP_VISION:-0}
       SKIP_SPEAKER: ${SKIP_SPEAKER:-0}
       SKIP_SOUND: ${SKIP_SOUND:-0}
@@ -191,21 +197,66 @@ services:
   export-detector:
     profiles: ["setup"]
     image: ultralytics/ultralytics:8.4.20
-    working_dir: /out
+    environment:
+      # The models root rather than detect/: the script makes and enters detect/ itself, and
+      # reads the root to learn the ownership it hands the export back to. MODEL_UID/MODEL_GID
+      # as in fetch-models above.
+      MODEL_DIR: /models
+      MODEL_UID: ${MODEL_UID:-}
+      MODEL_GID: ${MODEL_GID:-}
     volumes:
-      - ./models/detect:/out
+      - ./models:/models
     entrypoint: ["python", "-c"]
+    # The same script as scripts/export-detector.sh, which runs this export from a checkout. A
+    # copy rather than a reference, because this one-shot has to work from a compose file and an
+    # .env with no checkout at all — so the two have to stay identical.
     command:
       - |
-        from ultralytics import YOLO
-        m = YOLO("yolo26n.pt")
-        m.export(format="onnx", simplify=True, dynamic=True)
-        with open("labels.txt", "w") as f:
-            f.writelines(m.names[i] + "\n" for i in range(len(m.names)))
         import os
-        os.replace("yolo26n.onnx", "model.onnx")
-        os.remove("yolo26n.pt")
-        print("wrote model.onnx and labels.txt")
+
+        # MODEL_DIR is the models root, not detect/ — the ownership this export is handed back to
+        # lives on the root directory, and abspath is taken before the chdir below so a relative
+        # MODEL_DIR from a checkout still resolves afterwards.
+        models = os.path.abspath(os.environ.get("MODEL_DIR", "/models"))
+        detect = os.path.join(models, "detect")
+        os.makedirs(detect, exist_ok=True)
+        os.chdir(detect)
+
+
+        def hand_back():
+            # Root wrote everything here, into a bind mount of a directory belonging to whoever
+            # ran this, so it is handed back to the ownership of the models root itself — which
+            # is what a clone already carries — or to MODEL_UID/MODEL_GID where there was no
+            # clone and Docker created that directory as root. In a finally block because a
+            # failed export still leaves the downloaded weights behind, and those have to be as
+            # deletable as a finished run. Skipped when not root, which is this same script run
+            # against a local ultralytics install by its owner. A refusal is a warning rather
+            # than a failure: the export itself succeeded.
+            if os.geteuid() != 0:
+                return
+            st = os.stat(models)
+            uid = int(os.environ.get("MODEL_UID") or st.st_uid)
+            gid = int(os.environ.get("MODEL_GID") or st.st_gid)
+            try:
+                for path, _, names in os.walk(detect):
+                    os.chown(path, uid, gid)
+                    for name in names:
+                        os.chown(os.path.join(path, name), uid, gid)
+            except OSError as err:
+                print(f"WARNING: {detect} stays owned by root ({err}).")
+
+
+        try:
+            from ultralytics import YOLO
+            m = YOLO("yolo26n.pt")
+            m.export(format="onnx", simplify=True, dynamic=True)
+            with open("labels.txt", "w") as f:
+                f.writelines(m.names[i] + "\n" for i in range(len(m.names)))
+            os.replace("yolo26n.onnx", "model.onnx")
+            os.remove("yolo26n.pt")
+            print("wrote model.onnx and labels.txt")
+        finally:
+            hand_back()
 
 volumes:
   video:

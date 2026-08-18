@@ -28,6 +28,7 @@ import '../widgets/frame_size.dart';
 import '../widgets/nocturne_button.dart';
 import '../widgets/paired_rows.dart';
 import '../widgets/resize_handle.dart';
+import '../widgets/roster_widgets.dart';
 import '../widgets/storage_bar.dart';
 import '../widgets/timeline_scrubber.dart';
 import '../widgets/replay_transport.dart';
@@ -308,6 +309,7 @@ class _WallScreenState extends ConsumerState<WallScreen> {
                   onRearrangingChanged: (v) => setState(() => _rearranging = v),
                   replaying: _replay.replaying,
                   canRearrange: repository.preferencesKnown,
+                  empty: repository.cameras().isEmpty,
                 ),
 
                 // A sibling of the header, not part of it — and that is the whole placement
@@ -427,18 +429,23 @@ class _WallScreenState extends ConsumerState<WallScreen> {
                   // Only for the tray's height, and only the settled one: the wall keeps its
                   // layout while the tray moves, and what changes is how much room the tiles are
                   // given to scroll into behind it.
-                  child: ListenableBuilder(
-                    listenable: _tray,
-                    builder: (context, _) => _CompactWall(
-                      layout: _layout,
-                      repository: repository,
-                      replay: _replay,
-                      onTapCamera: _openTile,
-                      aspects: _frameAspects,
-                      onAspect: _rememberAspect,
-                      trayHeight: _tray.height,
-                    ),
-                  ),
+                  child: cameras.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.fromLTRB(12, 12, 12, 0),
+                          child: _NoCameras(),
+                        )
+                      : ListenableBuilder(
+                          listenable: _tray,
+                          builder: (context, _) => _CompactWall(
+                            layout: _layout,
+                            repository: repository,
+                            replay: _replay,
+                            onTapCamera: _openTile,
+                            aspects: _frameAspects,
+                            onAspect: _rememberAspect,
+                            trayHeight: _tray.height,
+                          ),
+                        ),
                 ),
               ],
             ),
@@ -504,32 +511,42 @@ class _WallScreenState extends ConsumerState<WallScreen> {
     ServalRepository repository,
     List<ActivityItem> Function(DateTime?) poolAt,
   ) {
+    // A registry with nothing in it is the first thing a new install shows, and an empty grid
+    // over an empty timeline says only that something is broken. The wall explains itself
+    // instead, and points at the one page that fixes it.
+    final empty = repository.cameras().isEmpty;
+
     final wall = Padding(
       padding: const EdgeInsets.fromLTRB(22, 18, 18, 22),
       child: Column(
         children: [
           Expanded(
-            child: _TileGrid(
-              layout: _layout,
-              repository: repository,
-              rearranging: _rearranging,
-              replay: _replay,
-              onTapCamera: _openTile,
-              onLayoutChanged: _applyLayout,
-            ),
+            child: empty
+                ? const _NoCameras()
+                : _TileGrid(
+                    layout: _layout,
+                    repository: repository,
+                    rearranging: _rearranging,
+                    replay: _replay,
+                    onTapCamera: _openTile,
+                    onLayoutChanged: _applyLayout,
+                  ),
           ),
-          const SizedBox(height: 14),
           // Always on, exactly as the single-camera view has it. There is no
           // replay *mode* to enter: the day is on screen, and clicking it is
-          // what starts playback.
-          _WallScrubber(
-            replay: _replay,
-            range: _range,
-            onRangeChanged: _setRange,
-            // Any one recorded camera is enough for the bar to mean something. It reads
-            // "nothing is kept" only when that is true of the whole wall.
-            records: _repository.cameras().any((camera) => camera.records),
-          ),
+          // what starts playback. The exception is a wall with no cameras, where the bar spans
+          // nothing and its range control chooses between empty days.
+          if (!empty) ...[
+            const SizedBox(height: 14),
+            _WallScrubber(
+              replay: _replay,
+              range: _range,
+              onRangeChanged: _setRange,
+              // Any one recorded camera is enough for the bar to mean something. It reads
+              // "nothing is kept" only when that is true of the whole wall.
+              records: _repository.cameras().any((camera) => camera.records),
+            ),
+          ],
         ],
       ),
     );
@@ -603,6 +620,40 @@ class _WallScreenState extends ConsumerState<WallScreen> {
 
 /// The wall's timeline: the union of every camera's day, a lane for each of them, and the
 /// transport that drives all of it.
+/// What the wall shows before a single camera has been registered.
+///
+/// A [ConsumerWidget] for the one thing it needs from outside: every camera write is Admin-only
+/// on the Server, so below that role this offers no button. Naming an action the Server will
+/// refuse is worse than the blank grid it replaces — it sends a viewer to a page they cannot act
+/// on, having told them they could.
+class _NoCameras extends ConsumerWidget {
+  const _NoCameras();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final canEdit = ref.watch(isAdminProvider);
+    return EmptyRoster(
+      icon: PhosphorIconsRegular.videoCamera,
+      title: 'No cameras yet',
+      body: canEdit
+          ? 'Add one under Settings → Cameras — paste its stream URL and Serval starts '
+                'pulling it straight away, with nothing to restart.'
+          : 'No cameras have been added yet. An administrator can add them under '
+                'Settings → Cameras.',
+      action: canEdit
+          ? NocturneButton(
+              label: 'Add a camera',
+              icon: PhosphorIconsRegular.plus,
+              variant: NocturneButtonVariant.primary,
+              // The path, not '/settings', which resolves to a different screen either side of
+              // the compact breakpoint.
+              onPressed: () => context.go('/settings/cameras'),
+            )
+          : null,
+    );
+  }
+}
+
 class _WallScrubber extends StatelessWidget {
   const _WallScrubber({
     required this.replay,
@@ -626,6 +677,9 @@ class _WallScrubber extends StatelessWidget {
       // merge says the thing you actually want — was anything recording, did anything happen —
       // in a fraction of the height, and the wall keeps the rest.
       lanes: replay.replaying ? replay.lanes : const [],
+      // One bar over every camera, so the empty-track sentence names the wall rather than a
+      // camera the reader would have to go looking for.
+      scope: TimelineScope.wall,
       range: range,
       records: records,
       onRangeChanged: onRangeChanged,
@@ -655,11 +709,16 @@ class _WallHeader extends StatelessWidget {
     required this.onRearrangingChanged,
     required this.replaying,
     required this.canRearrange,
+    required this.empty,
   });
 
   final bool rearranging;
   final ValueChanged<bool> onRearrangingChanged;
   final bool replaying;
+
+  /// Whether the registry has any cameras in it at all, which the subtitle and the rearrange
+  /// control both answer to: there is no arrangement to make out of nothing.
+  final bool empty;
 
   /// Whether an arrangement can be changed at all, which is false while this account's stored one
   /// has not been read — see `ServalRepository.preferencesKnown`. What is on screen then is a
@@ -707,6 +766,11 @@ class _WallHeader extends StatelessWidget {
                     : !canRearrange
                     ? 'Still loading your saved arrangement — this is the default '
                           'until it arrives.'
+                    // Below the loading branch on purpose: an account whose arrangement is still
+                    // in flight has not been shown to have no cameras, and flashing this at
+                    // somebody who has six is the worse of the two wrong answers.
+                    : empty
+                    ? 'No cameras yet — add one under Settings → Cameras.'
                     : replaying
                     ? 'Every camera at once, at the same moment. '
                           'Drag the timeline to go there.'
@@ -728,7 +792,9 @@ class _WallHeader extends StatelessWidget {
         // cameras for attention. The accent outline while rearranging is all
         // that carries the mode, so it stays.
         Tooltip(
-          message: !canRearrange
+          message: empty
+              ? 'Nothing to arrange yet'
+              : !canRearrange
               ? 'Waiting for your saved arrangement'
               : rearranging
               ? 'Done rearranging'
@@ -740,7 +806,7 @@ class _WallHeader extends StatelessWidget {
             variant: rearranging
                 ? NocturneButtonVariant.primary
                 : NocturneButtonVariant.ghost,
-            onPressed: canRearrange
+            onPressed: canRearrange && !empty
                 ? () => onRearrangingChanged(!rearranging)
                 : null,
           ),
