@@ -11,8 +11,8 @@ on:
       - "App/serval_app/**"
       - ".dockerignore"
       - ".github/workflows/server-image.yml"
-  # Pushing a v<major>.<minor>.0 tag is how the minor is bumped, and the .0 it names has to get an
-  # image of its own even though the commit it points at was probably built already.
+  # Pushing a v<major>.<minor>.<patch> tag is how a release is cut, and the version it names has to
+  # get an image of its own even though the commit it points at was probably built already.
   #
   # `create` rather than a tags: entry under push: above — the paths filter applies to every push
   # event, and a tag introduces no files, so a tag push can match nothing and be silently skipped.
@@ -40,18 +40,22 @@ jobs:
           # a poor trade on a job that then spends minutes compiling llama.cpp.
           fetch-depth: 0
 
-      # The version is the nearest v<major>.<minor>.0 tag with the commits since it as the patch:
-      # v0.1.0 plus 7 commits is 0.1.7. Bumping the minor is therefore `git tag v0.2.0`, and the
-      # patch takes care of itself. No tag at all fails this step outright, which is the point —
-      # there is no version to guess and a build that invented one would collide with a real
-      # release.
+      # A release names its own version: the tag is the answer, so `git tag v0.4.2` publishes 0.4.2
+      # and nothing else has a say. A build off main is not a release and has no version of its
+      # own — it stamps the last release, and SOURCE_REVISION below is what identifies the build.
+      #
+      # Numeric x.y.z either way, because the Dockerfile hands this to -p:VersionPrefix, which
+      # takes major.minor.patch and rejects a prerelease suffix. No tag at all fails this step
+      # outright, which is the point — there is no version to guess.
       - id: version
         run: |
-          described=$(git describe --tags --match 'v[0-9]*' --long)
-          version=$(printf '%s' "${described#v}" | awk -F- '{split($1,v,"."); print v[1]"."v[2]"."$2}')
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            version=${GITHUB_REF#refs/tags/v}
+          else
+            version=$(git describe --tags --match 'v[0-9]*' --abbrev=0 | sed 's/^v//')
+          fi
           echo "version=$version" >>"$GITHUB_OUTPUT"
-          echo "version_minor=${version%.*}" >>"$GITHUB_OUTPUT"
-          echo "Building $version from $described" >>"$GITHUB_STEP_SUMMARY"
+          echo "Building $version" >>"$GITHUB_STEP_SUMMARY"
 
       - uses: docker/setup-buildx-action@v4
 
@@ -66,20 +70,25 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
-          # Four tags, narrowing from "whatever is newest" to one exact build:
-          #   latest      moves every push to main — what an unpinned deployment follows
-          #   0.1         moves within a minor — patches arrive, the shape does not change
-          #   0.1.7       one release, never rewritten
-          #   sha-abc1234 one commit; rolling back on the NAS is editing :latest to this
+          # Two streams. A tag push is a release and takes the three tags an unpinned, a
+          # minor-pinned and an exactly-pinned deployment follow:
+          #   latest      moves to the newest release — what deploy/docker-compose.yml defaults to
+          #   0.4         moves within a minor — patches arrive, the shape does not change
+          #   0.4.2       one release, never rewritten
           #
-          # latest is held to the default branch so that tagging an *older* commit publishes its
-          # version without dragging latest backwards. type=raw rather than type=semver throughout:
-          # type=semver reads the tag off the ref and so produces nothing on the push-to-main builds
-          # that are most of them, while the version step's answer is right for both.
+          # A push to main is not a release. It gets `edge` and its sha and consumes no version
+          # number, so a failed build or a commit the paths filter skips cannot burn one:
+          #   edge        moves every push to main — head, for a deployment that wants it
+          #   sha-abc1234 one commit; rolling back on the NAS is editing the tag to this
+          #
+          # latest is gated on the ref being a tag rather than on the branch, so a push to main
+          # cannot drag it onto an unreleased build. {{major}}.{{minor}} reads the tag off the ref
+          # and so emits nothing on a main build, which is the behaviour wanted here.
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=${{ steps.version.outputs.version }}
-            type=raw,value=${{ steps.version.outputs.version_minor }}
+            type=raw,value=${{ steps.version.outputs.version }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable={{is_default_branch}}
             type=sha,prefix=sha-
 
       # A registry reference has to be lowercase and github.repository_owner is not — it is the

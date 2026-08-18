@@ -58,33 +58,33 @@ the CPU-only variant; the local compose file does this, since a dev box does not
 
 ## Versions and image tags
 
-Every build publishes four tags, and which one a deployment pins to is the whole update policy:
+Which tag a deployment pins to is the whole update policy:
 
 | Tag | Moves | Pin to it when |
 | --- | --- | --- |
-| `latest` | every push to `main` | you want whatever is newest and will notice if it breaks |
-| `0.1` | within a minor | you want fixes without the shape changing under you |
-| `0.1.7` | never | you want this exact release and nothing else |
+| `latest` | to each new release | you want the newest release, unattended |
+| `0.4` | within a minor | you want fixes without the shape changing under you |
+| `0.4.2` | never | you want this exact release and nothing else |
+| `edge` | every push to `main` | you want head and will notice if it breaks |
 | `sha-abc1234` | never | you are rolling back to a build you have already run |
 
-The number itself is derived, not stored. A `v<major>.<minor>.0` git tag names the release, and the
-patch is the count of commits since it — `v0.1.0` plus seven commits is `0.1.7`. So **bumping the
-minor is one command**, and the patch never needs touching:
+A release is a git tag and nothing else. The tag names the version, so any version is available —
+patch, minor or major:
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.4.2 && git push origin v0.4.2
 ```
 
-Two consequences worth knowing. The patch counts *commits*, not releases, so merging a branch
-advances it by the whole branch and leaves gaps — squash-merging keeps it to one per change. And a
-build made outside the workflow reports `0.0.0-dev`, because it has no tags to describe against and
-inventing a number would collide with a real one.
+A push to `main` is not a release. It publishes `edge` and its `sha-` tag, consumes no version
+number, and stamps the last released version into the assembly — the revision is what tells two
+`edge` builds apart. A build made outside the workflow reports `0.0.0-dev`, because it has no tags
+to describe against and inventing a number would collide with a real one.
 
 `GET /api/system/version` reads it back off the running assembly:
 
 ```console
 $ curl -s -H "Authorization: Bearer $TOKEN" http://<host>:8080/api/system/version
-{"version":"0.1.7","revision":"abc1234…"}
+{"version":"0.4.2","revision":"abc1234…"}
 ```
 
 The App shows the same pair under *Source* in the icon rail — the version to quote, the commit
@@ -97,8 +97,9 @@ real deployed stack (TrueNAS SCALE Apps, AMD iGPU), as opposed to the dev one ab
 in the ways the host forces:
 
 - **No `build:`** — TrueNAS Apps only runs pre-built images, so the server image comes from GHCR,
-  pushed by [.github/workflows/server-image.yml](../.github/workflows/server-image.yml) on
-  every push to `main`. `pull_policy: always` makes stop→start in the Apps UI the update loop.
+  pushed by [.github/workflows/server-image.yml](../.github/workflows/server-image.yml). On
+  `:latest` that is each new release; switch the tag to `:edge` to follow `main` instead.
+  `pull_policy: always` makes stop→start in the Apps UI the update loop.
 - **Bind mounts on ZFS datasets** rather than named volumes, so recordings and the database sit
   on the pool where they are visible and snapshottable.
 - **Model weights mounted at `/app/models`**, never baked into the image — 3.5 GB that changes
