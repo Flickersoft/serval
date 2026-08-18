@@ -143,15 +143,24 @@ On startup the worker resolves every alert a previous run left `pending` — bou
 
 Object alerts are raised from
 [`CameraAiCoordinator.StoreAsync`](../Server/Serval.Server/Ai/CameraAiCoordinator.cs), **while the
-episode is still open** — above the early return that skips storage. Whether an episode is an alert
-is decided when it opens and never revised, so waiting for the close would delay the queue by
-`AbsenceSeconds`: half a minute after the thing somebody is being told about, by which time the
-footage is rolling out of the buffer the clip is cut from.
+episode is still open** — above the early return that skips storage. Waiting for the close would
+delay the queue by `AbsenceSeconds`: half a minute after the thing somebody is being told about, by
+which time the footage is rolling out of the buffer the clip is cut from.
+
+Whether an episode is an alert is settled in two halves, and only one of them at the open. Whether it
+*may* be one — an arrival, of a class in `AlertClasses` — is decided there and never revisited.
+Whether it was ever seen clearly enough is asked again on every measured frame until it passes, then
+never again. So an alert can be raised several seconds into a sighting, which is the point: the frame
+an episode opens on is the one where a subject is furthest away and least certain, and judging them
+there made examining them early a penalty. See the alert rule in
+[detection.md](detection.md#the-alert-rule).
 
 That path runs once a frame for as long as the object is in view, which is why the alert's `_id` is
 the episode's: all but the first insert are a duplicate key, and
 [`AlertRepository.RaiseAsync`](../Server/Serval.Server/Alerts/AlertRepository.cs) reports which one
-it was so only the first queues a clip.
+it was so only the first queues a clip. An episode continued past `MaxEpisodeSeconds` carries a new
+id and so raises its own alert, which is intended — a presence long enough to be cut in half is
+reported as two records, and both are true.
 
 The consequence to keep in mind: `peak_at` and `box` are the best frame **so far** rather than the
 best of the whole episode. That is the right picture anyway — the card says "the frame it fired on".

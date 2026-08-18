@@ -353,6 +353,7 @@ public class CameraAiSignatureTests
         data.Add(r => r.PaddingFraction = 0.2);
         data.Add(r => r.MinSizeFraction = 0.5);
         data.Add(r => r.MinRegionScale = 0.75);
+        data.Add(r => r.MaxRegionScale = 1.5);
 
         // The tiling knobs are read when the pipeline plans its floor tiles on the first frame,
         // so they are session-read like everything else here. The hand-written digest this
@@ -360,6 +361,7 @@ public class CameraAiSignatureTests
         // exists to prevent.
         data.Add(r => r.TiledFloor = !r.TiledFloor);
         data.Add(r => r.TiledFloorMinGain = 3.5);
+        data.Add(r => r.SweepAtOnce = 4);
         data.Add(r => r.TileOverlapFraction = 0.33);
         return data;
     }

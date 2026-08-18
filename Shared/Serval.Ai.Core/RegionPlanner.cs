@@ -96,8 +96,17 @@ public sealed class RegionPlanner(RegionOptions options, IReadOnlyList<Detection
     /// <para>Crops are grown toward it, which costs nothing: the scale is set by whichever axis is
     /// squeezed hardest, so the slack one is free to fill. It affects the opportunistic half only, for
     /// the reason <paramref name="maxRegion"/> does.</para></param>
+    /// <param name="minRegion">The smallest crop that can still reach the detector without being
+    /// enlarged past <see cref="RegionOptions.MaxRegionScale"/>, or null for no bound. Resolved by the
+    /// caller from <see cref="RegionOptions.MinRegion"/>, in frame pixels, for the reason the arguments
+    /// above are.
+    ///
+    /// <para>It bounds the opportunistic half only, and clamps to the frame: a frame smaller than the
+    /// bound gives what it has. The floor and a sweep tile are already at or below the detector's own
+    /// shape, so neither has anything to bound.</para></param>
     /// <returns>Regions to examine, or empty when this frame needs no inference at all. None is ever
-    /// larger than <paramref name="maxRegion"/>.</returns>
+    /// larger than <paramref name="maxRegion"/>, and no crop is smaller than
+    /// <paramref name="minRegion"/> clamped to the frame.</returns>
     public IReadOnlyList<PlannedRegion> Plan(
         DateTimeOffset now,
         int frameWidth,
@@ -109,10 +118,31 @@ public sealed class RegionPlanner(RegionOptions options, IReadOnlyList<Detection
         IReadOnlyList<TrackedObject> tracks,
         IReadOnlyList<FrameRegion>? floorTiles = null,
         (int Width, int Height)? maxRegion = null,
-        double inputAspect = 0)
+        double inputAspect = 0,
+        (int Width, int Height)? minRegion = null)
     {
         var whole = new FrameRegion(0, 0, frameWidth, frameHeight);
         bool floorDue = now - _lastFloorAt >= TimeSpan.FromSeconds(Math.Max(options.FloorSeconds, 0));
+
+        // Small enough to run whole: the sweep is then a like-for-like replacement for the whole-frame
+        // pass — every pixel every frame, at native scale instead of shrunk — so it stands on its own
+        // and does not need cropping on to be safe. Checked before the spread sweep below, because a
+        // camera that qualifies for this wants it whether or not it is also cutting crops.
+        if (floorTiles is { Count: > 1 } atOnce && atOnce.Count <= options.SweepAtOnce)
+        {
+            _lastFloorAt = now;
+
+            List<PlannedRegion> sweep = [.. atOnce.Select(static tile => new PlannedRegion(tile, RegionReason.Tile))];
+
+            if (cropping)
+            {
+                sweep.AddRange(
+                    PlanCrops(now, frameWidth, frameHeight, changedCells, gridWidth, gridHeight, tracks, inputAspect, maxRegion, minRegion));
+            }
+
+            return sweep;
+        }
+
         bool tiling = cropping && floorTiles is { Count: > 1 };
 
         if (!cropping)
@@ -149,7 +179,7 @@ public sealed class RegionPlanner(RegionOptions options, IReadOnlyList<Detection
                 if (!floorDue)
                 {
                     // Sweep finished and the next one is not due. Fall through to motion and tracks.
-                    return PlanCrops(now, frameWidth, frameHeight, changedCells, gridWidth, gridHeight, tracks, inputAspect, maxRegion);
+                    return PlanCrops(now, frameWidth, frameHeight, changedCells, gridWidth, gridHeight, tracks, inputAspect, maxRegion, minRegion);
                 }
 
                 _sweepIndex = 0;
@@ -160,7 +190,7 @@ public sealed class RegionPlanner(RegionOptions options, IReadOnlyList<Detection
 
             List<PlannedRegion> withTile = [new PlannedRegion(tile, RegionReason.Tile)];
             withTile.AddRange(
-                PlanCrops(now, frameWidth, frameHeight, changedCells, gridWidth, gridHeight, tracks, inputAspect, maxRegion));
+                PlanCrops(now, frameWidth, frameHeight, changedCells, gridWidth, gridHeight, tracks, inputAspect, maxRegion, minRegion));
 
             return withTile;
         }
@@ -174,7 +204,7 @@ public sealed class RegionPlanner(RegionOptions options, IReadOnlyList<Detection
             return [new PlannedRegion(whole, RegionReason.Floor)];
         }
 
-        return PlanCrops(now, frameWidth, frameHeight, changedCells, gridWidth, gridHeight, tracks, inputAspect, maxRegion);
+        return PlanCrops(now, frameWidth, frameHeight, changedCells, gridWidth, gridHeight, tracks, inputAspect, maxRegion, minRegion);
     }
 
     /// <summary>
@@ -191,7 +221,8 @@ public sealed class RegionPlanner(RegionOptions options, IReadOnlyList<Detection
         int gridHeight,
         IReadOnlyList<TrackedObject> tracks,
         double inputAspect,
-        (int Width, int Height)? maxRegion)
+        (int Width, int Height)? maxRegion,
+        (int Width, int Height)? minRegion)
     {
         int cap = Math.Max(options.MaxPerFrame, 1);
         List<PlannedRegion> planned = [];
@@ -200,7 +231,7 @@ public sealed class RegionPlanner(RegionOptions options, IReadOnlyList<Detection
         // Tracks before motion: losing a track fragments an episode that already exists, where
         // missing a motion cluster costs at worst a later acquisition the floor still guarantees.
         // Merging means a group standing together is one crop rather than one each.
-        foreach (FrameRegion region in Tracked(tracks, frameWidth, frameHeight, maxRegion))
+        foreach (FrameRegion region in Tracked(tracks, frameWidth, frameHeight, maxRegion, minRegion))
         {
             if (planned.Count >= cap)
             {
@@ -217,7 +248,7 @@ public sealed class RegionPlanner(RegionOptions options, IReadOnlyList<Detection
         }
 
         IReadOnlyList<FrameRegion> motion = MotionRegions.Cluster(
-            changedCells, gridWidth, gridHeight, frameWidth, frameHeight, options, maxRegion);
+            changedCells, gridWidth, gridHeight, frameWidth, frameHeight, options, maxRegion, minRegion);
 
         foreach (FrameRegion region in motion)
         {
@@ -295,7 +326,8 @@ public sealed class RegionPlanner(RegionOptions options, IReadOnlyList<Detection
         IReadOnlyList<TrackedObject> tracks,
         int frameWidth,
         int frameHeight,
-        (int Width, int Height)? maxRegion)
+        (int Width, int Height)? maxRegion,
+        (int Width, int Height)? minRegion)
     {
         if (tracks.Count == 0)
         {
@@ -335,7 +367,8 @@ public sealed class RegionPlanner(RegionOptions options, IReadOnlyList<Detection
                     ((box.Y + box.Height) * frameHeight) + padY,
                     frameWidth,
                     frameHeight,
-                    options.MinSizeFraction),
+                    options.MinSizeFraction,
+                    minRegion),
                 maxRegion);
         }
 

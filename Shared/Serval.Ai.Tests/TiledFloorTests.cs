@@ -105,22 +105,75 @@ public class TiledFloorTests
         var options = new RegionOptions { TiledFloor = true };
         var input = new DetectorInput(640, 384, DetectorLayout.FloatNchw, 1f / 255f);
 
-        // 640x360 into 640x384 is scale 1.0 — the live 16:9 case, gain 1.0.
+        // 640x360 into 640x384 is scale 1.0 — a shape at the camera's own aspect, gain 1.0, nothing to
+        // recover by tiling.
         Assert.False(options.ShouldTileFloor(640, 360, input));
 
         // The panoramic into the same input is squeezed hard enough to qualify.
         Assert.True(options.ShouldTileFloor(1536, 432, input));
+
+        // The same 16:9 frame into a fixed square input is squeezed on the horizontal instead, and a
+        // 1.25x recovery is worth taking because none of it is invented.
+        Assert.True(options.ShouldTileFloor(640, 360, Square));
     }
 
     [Fact]
-    public void Tiling_is_independent_of_whether_cropping_is_on()
+    public void A_sweep_needs_cropping_because_a_tile_alone_cannot_confirm_a_track()
     {
-        // Deliberately separate switches. Cropping decides where to look opportunistically; this changes
-        // how the coverage guarantee itself is made, and must not arrive as a side effect of the other.
+        // The two option predicates disagree — tiling is asked for and cropping is not — and the planner
+        // resolves it toward the whole frame. That is not an oversight.
+        //
+        // A sweep examines a given pixel once per cycle, so the strips outside the tiles' overlap are
+        // seen once every six frames here. ObjectTracker drops a tentative track the moment one frame
+        // passes without matching it, and confirmation needs consecutive sightings, so a subject seen
+        // that rarely never confirms and never becomes an episode. Cropping is what bridges it: a
+        // retention crop is planned for every live track, tentative ones included.
+        //
+        // Six tiles, so this is the spread schedule. A sweep of at most RegionOptions.SweepAtOnce tiles
+        // is run whole on every frame instead, covers every pixel every frame, and needs nothing
+        // alongside it — see AcquisitionTests.
         var options = new RegionOptions { Mode = RegionMode.Off, TiledFloor = true };
 
         Assert.True(options.ShouldTileFloor(1536, 432, Square));
         Assert.False(options.ShouldCrop(1536, 432, Square));
+
+        var start = new DateTimeOffset(2026, 8, 10, 12, 0, 0, TimeSpan.Zero);
+        IReadOnlyList<FrameRegion> tiles = DetectorShapes.Tiles(1536, 432, 320, 320, 0.2);
+        var planner = new RegionPlanner(options);
+
+        PlannedRegion only = Assert.Single(
+            planner.Plan(start, 1536, 432, cropping: false, default, 0, 0, [], tiles));
+
+        Assert.Equal(RegionReason.Floor, only.Reason);
+        Assert.Equal(new FrameRegion(0, 0, 1536, 432), only.Region);
+    }
+
+    [Fact]
+    public void A_swept_subject_is_re_sighted_by_a_retention_crop_on_the_next_frame()
+    {
+        // The acquisition path the coupling above buys. A tile finds something, the tracker holds it as
+        // tentative, and the very next frame plans a crop for it — so its sightings are consecutive and
+        // it can reach the confirmation ObjectTracker demands, rather than dying while the sweep is
+        // looking at another tile.
+        var options = new RegionOptions { TiledFloor = true, MaxPerFrame = 3, PaddingFraction = 0 };
+        var start = new DateTimeOffset(2026, 8, 10, 12, 0, 0, TimeSpan.Zero);
+        IReadOnlyList<FrameRegion> tiles = DetectorShapes.Tiles(1536, 432, 320, 320, 0.2);
+        var planner = new RegionPlanner(options);
+
+        // Frame one sweeps the first tile.
+        Assert.Contains(
+            RegionReason.Tile,
+            planner.Plan(start, 1536, 432, true, default, 0, 0, [], tiles).Select(r => r.Reason));
+
+        // Frame two, with a tentative track where that tile found something.
+        var tentative = new TrackedObject(
+            1, "cat", new BoundingBox(0.05f, 0.4f, 0.04f, 0.15f), 0.4f,
+            TrackState.Tentative, start, start, 1);
+
+        IReadOnlyList<PlannedRegion> next = planner.Plan(
+            start.AddSeconds(0.5), 1536, 432, true, default, 0, 0, [tentative], tiles);
+
+        Assert.Contains(RegionReason.Track, next.Select(r => r.Reason));
     }
 
     private static IReadOnlyList<PlannedRegion> PlanAt(

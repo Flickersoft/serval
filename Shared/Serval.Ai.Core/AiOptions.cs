@@ -569,18 +569,41 @@ public sealed record RegionOptions
     /// </summary>
     public RegionMode Mode { get; set; } = RegionMode.Auto;
 
-    /// <summary>The ratio at or above which <see cref="RegionMode.Auto"/> turns regions on.</summary>
+    /// <summary>
+    /// The ratio at or above which <see cref="RegionMode.Auto"/> turns regions on.
+    ///
+    /// <para><b>This decides how often the whole picture is examined, not only where to look.</b> With
+    /// crops off, <see cref="RegionPlanner"/> examines the entire frame on <em>every</em> frame; with
+    /// them on, the whole frame drops to once per <see cref="FloorSeconds"/> and motion and tracks carry
+    /// the time in between. The trade only pays when a crop is much smaller than the frame.</para>
+    ///
+    /// <para>1.5 is where that stops being true. <see cref="MaxRegionScale"/> holds a crop to native
+    /// scale, so at a gain of 1.25 the smallest crop is the detector's own input — 512x360 out of a
+    /// 640x360 frame, four fifths of the picture. Lowering this below 1.5 spends the every-frame
+    /// guarantee on close-ups that are not close-ups, and costs acquisition outright.</para>
+    ///
+    /// <para>A camera squeezed hard enough for tiles gets its native scale from
+    /// <see cref="TiledFloor"/> instead, which replaces the whole-frame pass rather than thinning it.</para>
+    /// </summary>
     public double AutoMinRatio { get; set; } = 1.5;
 
     /// <summary>
     /// Whether the whole-frame pass is made as a sweep of native-scale tiles instead of one shrunken
     /// look.
     ///
-    /// <para><b>Off by default, and independent of <see cref="Mode"/> on purpose.</b> Region cropping
-    /// decides where to look *opportunistically*; this changes how the coverage guarantee itself is
-    /// made, which is a much bigger behavioural change and not one that should arrive as a side effect
-    /// of anything. A working deployment must be able to take an accelerator's code without its
-    /// detection behaviour moving.</para>
+    /// <para><b>Off by default,</b> because it changes how the coverage guarantee itself is made — a
+    /// much bigger behavioural change than deciding where to look opportunistically, and not one that
+    /// should arrive as a side effect of anything else.</para>
+    ///
+    /// <para><b>A sweep of at most <see cref="SweepAtOnce"/> tiles is run whole, on every frame.</b>
+    /// Every pixel is then examined as often as under the single shrunken pass it replaces, at native
+    /// scale instead, and it needs nothing alongside it.</para>
+    ///
+    /// <para><b>A longer sweep is spread one tile per frame, and needs <see cref="Mode"/> on;
+    /// <see cref="RegionPlanner"/> enforces that.</b> It examines a given pixel once per cycle, and
+    /// <see cref="ObjectTracker"/> drops a tentative track the moment one frame passes without matching
+    /// it, so a subject seen that rarely never confirms and never becomes an episode. Retention crops
+    /// bridge it: one is planned for every *live* track, tentative ones included.</para>
     ///
     /// <para><b>What it is for.</b> A backend with one compiled input shape gives every camera the same
     /// one, so a 32:9 panoramic is squeezed to a fraction of its scale — the floor covers every pixel at
@@ -598,11 +621,33 @@ public sealed record RegionOptions
     /// How badly the whole frame has to be shrunk before <see cref="TiledFloor"/> actually tiles.
     ///
     /// The same <see cref="Gain"/> ratio <see cref="RegionMode.Auto"/> uses, so a camera whose frame
-    /// already arrives at close to native scale keeps the single cheap floor pass it does not need
-    /// replacing. Two rather than the 1.5 that turns cropping on: cropping is nearly free and tiling
-    /// is not.
+    /// already arrives at native scale keeps the single cheap floor pass it does not need replacing.
+    ///
+    /// <para><b>A worth-it guard, not a cost guard</b> — it asks whether tiling buys any scale at all.
+    /// Reading it as a cost guard gets the sign wrong: tile count grows with the squeeze, so a
+    /// *minimum*-gain threshold admits the expensive cameras and excludes the cheap ones. A 32:9
+    /// panoramic into 320² needs twelve tiles; a 16:9 stream into 512² needs two. What bounds the cost
+    /// is <see cref="TiledFloor"/> itself, and the inference budget behind it.</para>
     /// </summary>
-    public double TiledFloorMinGain { get; set; } = 2.0;
+    public double TiledFloorMinGain { get; set; } = 1.2;
+
+    /// <summary>
+    /// The largest sweep that is run whole, on every frame, instead of one tile at a time.
+    ///
+    /// <para>The two schedules make different promises. Run whole, a sweep examines every pixel every
+    /// frame and is a strict replacement for the shrunken whole-frame pass. Spread one tile per frame,
+    /// it examines a given pixel once per cycle — a real coverage cut that only motion and track crops
+    /// make up for.</para>
+    ///
+    /// <para>2 is what a 16:9 camera costs against a square input: a 640x360 frame into 512² is two
+    /// 512x360 tiles, so the guarantee doubles to two inferences per frame and buys the whole picture at
+    /// 1.00x rather than 0.80x. A panoramic into the same input needs twelve, which is not a guarantee a
+    /// host can make, so anything that wide keeps the spread sweep.</para>
+    ///
+    /// <para>Raising this multiplies the reserved, unsheddable cost of every camera it reaches; check it
+    /// against the <c>Detection budget</c> line.</para>
+    /// </summary>
+    public int SweepAtOnce { get; set; } = 2;
 
     /// <summary>
     /// Fraction of a tile that neighbouring tiles share.
@@ -663,12 +708,40 @@ public sealed record RegionOptions
 
     /// <summary>
     /// The least a region may be shrunk to reach the detector's input, as a fraction of the
-    /// frame's own pixels — the ceiling <see cref="MinSizeFraction"/> is the floor of. Below it a
-    /// small detector does not merely miss things, it invents them; the default is the guard
-    /// against the merge-chain runaway on <see cref="MotionRegions.AddMerged"/>, and the measured
-    /// per-model boundaries are in <c>Docs/detection.md</c>.
+    /// frame's own pixels. Below it a small detector does not merely miss things, it invents them;
+    /// the default is the guard against the merge-chain runaway on
+    /// <see cref="MotionRegions.AddMerged"/>, and the measured per-model boundaries are in
+    /// <c>Docs/detection.md</c>.
+    ///
+    /// <para>The other end of the same axis is <see cref="MaxRegionScale"/>. These two are a pair, in
+    /// the same units; <see cref="MinSizeFraction"/> is not — it is a fraction of the frame, and
+    /// bounds context rather than scale.</para>
     /// </summary>
     public double MinRegionScale { get; set; } = 0.5;
+
+    /// <summary>
+    /// The most a region may be <em>enlarged</em> to reach the detector's input — the ceiling on
+    /// magnification, where <see cref="MinRegionScale"/> is the floor.
+    ///
+    /// <para><b>One means a crop is never enlarged, only ever shrunk,</b> and that is the default
+    /// because enlarging does not add detail, it invents it. Measured against a car found in all sixty
+    /// of sixty whole frames at 0.906 mean confidence: at 1.25x it was still found in all sixty and
+    /// scored marginally better, at 2x in twenty-seven, and at 2.75x in none at all. The curve is
+    /// monotonic and every point past about 1.25x is worse than not cropping.</para>
+    ///
+    /// <para><b>This is the guard <see cref="MinSizeFraction"/> cannot be.</b> That one is stated in
+    /// frame units, so it cannot express "too tight for this detector": a crop is enlarged whenever the
+    /// input is bigger than <see cref="MinSizeFraction"/> of the frame, which at the defaults is every
+    /// camera under 4x <see cref="Gain"/> — nearly all of them.</para>
+    ///
+    /// <para><b>It costs no magnification that was ever real.</b> A crop's magnification over the
+    /// whole-frame pass is its scale divided by the whole frame's fit, so holding scale at 1.0 leaves
+    /// the maximum at exactly <see cref="Gain"/> — all of the detail the camera has over the input, and
+    /// none of the invented kind.</para>
+    ///
+    /// <para>Zero switches it off, the way zero switches off <see cref="MinRegionScale"/>.</para>
+    /// </summary>
+    public double MaxRegionScale { get; set; } = 1.0;
 
     /// <summary>
     /// Whether crops are cut, for a given frame and the input shape that frame resolves to.
@@ -742,6 +815,42 @@ public sealed record RegionOptions
         return (
             Math.Max(input.Width, (int)(input.Width / MinRegionScale)),
             Math.Max(input.Height, (int)(input.Height / MinRegionScale)));
+    }
+
+    /// <summary>
+    /// The smallest region that can still reach this input without being enlarged past
+    /// <see cref="MaxRegionScale"/>, in frame pixels — the mirror of <see cref="MaxRegion"/>.
+    ///
+    /// <para>Rounded <em>up</em>, where <see cref="MaxRegion"/> rounds down. Both err toward the guard:
+    /// a floor one pixel short would leave the scale marginally above the limit.</para>
+    ///
+    /// <para>Never larger than <see cref="MaxRegion"/>, so a configuration whose two bounds cross
+    /// resolves in favour of the ceiling. The ceiling guards against a detector inventing objects and
+    /// the floor only against it missing them, and without the clamp the contradiction would resolve
+    /// silently and by accident of ordering — grown by <see cref="MotionRegions.Fit"/>, refused by
+    /// <see cref="MotionRegions.AddMerged"/>, then cut back down by the split.</para>
+    ///
+    /// <para>Both axes, for the reason <see cref="MaxRegion"/> gives.</para>
+    /// </summary>
+    /// <returns>The bound, or null when it cannot apply — no input, or a scale of zero, which is how an
+    /// operator switches this off.</returns>
+    public (int Width, int Height)? MinRegion(DetectorInput input)
+    {
+        if (MaxRegionScale <= 0 || input.Width <= 0 || input.Height <= 0)
+        {
+            return null;
+        }
+
+        int width = (int)Math.Ceiling(input.Width / MaxRegionScale);
+        int height = (int)Math.Ceiling(input.Height / MaxRegionScale);
+
+        if (MaxRegion(input) is { } ceiling)
+        {
+            width = Math.Min(width, ceiling.Width);
+            height = Math.Min(height, ceiling.Height);
+        }
+
+        return (width, height);
     }
 }
 

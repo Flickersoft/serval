@@ -81,6 +81,13 @@ ARG LLAMA_BACKEND=Vulkan
 ARG SERVAL_VERSION=""
 ARG SOURCE_REVISION=""
 
+# The solution-wide properties every project inherits: the version block, and the Product / Company /
+# Copyright / license / repository metadata that becomes assembly attributes. MSBuild finds it by
+# walking up from each project, so it has to sit at /src, and it has to be here for the restore as
+# well as the publish — both evaluate it. Its own layer because it changes far less often than the
+# csproj files below.
+COPY Directory.Build.props .
+
 # Restore first with only the csproj files present, so the (slow) restore layer stays cached
 # until a dependency actually changes rather than on every source edit.
 COPY Server/Serval.Server/Serval.Server.csproj Server/Serval.Server/
@@ -91,9 +98,17 @@ RUN dotnet restore Server/Serval.Server/Serval.Server.csproj -p:LlamaBackend=$LL
 
 COPY Server/Serval.Server/ Server/Serval.Server/
 COPY Shared/ Shared/
+
+# ${VAR:+...} so an empty build arg passes no property at all rather than an empty one. The two are
+# not the same: -p: sets a *global* property, which a project cannot override, so the
+# `Condition="'$(VersionPrefix)' == ''"` fallback to 0.0.0 in Directory.Build.props evaluates true and
+# is then discarded, and Version comes out as a bare `-dev`. Neither error names the property or the
+# file: in this stage it is MSB4044 about a missing NuGetVersion, outside it "'-dev' is not a valid
+# version string".
 RUN dotnet publish Server/Serval.Server/Serval.Server.csproj \
         -c Release -o /app --no-restore -p:LlamaBackend=$LLAMA_BACKEND \
-        -p:VersionPrefix=$SERVAL_VERSION -p:SourceRevisionId=$SOURCE_REVISION
+        ${SERVAL_VERSION:+-p:VersionPrefix=$SERVAL_VERSION} \
+        ${SOURCE_REVISION:+-p:SourceRevisionId=$SOURCE_REVISION}
 
 # ---- Edge TPU natives ----
 #

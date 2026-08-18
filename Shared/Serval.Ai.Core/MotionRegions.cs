@@ -28,6 +28,9 @@ internal static class MotionRegions
     /// <param name="options">Cluster size floor, padding and cap.</param>
     /// <param name="max">The largest a region may be, or null for no bound. Clusters are merged within
     /// it and anything still over it is cut, so no rectangle returned here is ever larger.</param>
+    /// <param name="min">The smallest a region may be, or null for no bound — the size below which
+    /// reaching the detector's input would mean enlarging it. Applied by <see cref="Fit"/>, so a motion
+    /// crop and a track crop of the same subject are bounded identically.</param>
     public static IReadOnlyList<FrameRegion> Cluster(
         ReadOnlySpan<byte> changedCells,
         int gridWidth,
@@ -35,7 +38,8 @@ internal static class MotionRegions
         int frameWidth,
         int frameHeight,
         RegionOptions options,
-        (int Width, int Height)? max = null)
+        (int Width, int Height)? max = null,
+        (int Width, int Height)? min = null)
     {
         if (gridWidth <= 0 || gridHeight <= 0
             || changedCells.Length < gridWidth * gridHeight)
@@ -143,7 +147,7 @@ internal static class MotionRegions
 
             AddMerged(
                 regions,
-                Fit(left, top, right, bottom, frameWidth, frameHeight, options.MinSizeFraction),
+                Fit(left, top, right, bottom, frameWidth, frameHeight, options.MinSizeFraction, min),
                 max);
         }
 
@@ -181,12 +185,14 @@ internal static class MotionRegions
         double bottom,
         int frameWidth,
         int frameHeight,
-        double minSizeFraction) =>
+        double minSizeFraction,
+        (int Width, int Height)? min = null) =>
         Grow(
             Clamp(left, top, right, bottom, frameWidth, frameHeight),
             frameWidth,
             frameHeight,
-            minSizeFraction);
+            minSizeFraction,
+            min);
 
     /// <summary>
     /// Adds a crop, folding it into an existing one it overlaps as long as the result stays inside
@@ -346,12 +352,31 @@ internal static class MotionRegions
     /// footage, a crop tight enough to cut a truck in half returned nothing at all — not the person
     /// it was centred on, and not the truck either — while a larger crop of the same scene found the
     /// truck at 0.84. Magnification past that point costs more evidence than it buys.
+    ///
+    /// <para>Two floors, and the larger wins. <paramref name="minSizeFraction"/> is a share of the
+    /// frame and bounds how much context comes with the subject; <paramref name="min"/> comes from the
+    /// detector's input and bounds magnification, being the size below which reaching that input would
+    /// mean enlarging the crop. They answer different questions and neither implies the other.</para>
+    ///
+    /// <para>Both sit inside the clamp to the frame, which is why a frame shorter than
+    /// <paramref name="min"/> still yields a region inside it: a region grown past the frame would be
+    /// trimmed by <see cref="FramePreparer"/> afterwards, and the prepared geometry would then describe
+    /// a rectangle nobody asked for. Clamping the slack axis usually costs nothing, because a region's
+    /// scale is the *minimum* over its two axes — a 512x512 floor on a 360-tall frame gives 512x360,
+    /// which still reaches a 512x512 input at 1.00x.</para>
     /// </summary>
     private static FrameRegion Grow(
-        FrameRegion region, int frameWidth, int frameHeight, double minSizeFraction)
+        FrameRegion region,
+        int frameWidth,
+        int frameHeight,
+        double minSizeFraction,
+        (int Width, int Height)? min = null)
     {
-        int minWidth = Math.Min(frameWidth, (int)Math.Round(frameWidth * minSizeFraction));
-        int minHeight = Math.Min(frameHeight, (int)Math.Round(frameHeight * minSizeFraction));
+        int floorWidth = Math.Max((int)Math.Round(frameWidth * minSizeFraction), min?.Width ?? 0);
+        int floorHeight = Math.Max((int)Math.Round(frameHeight * minSizeFraction), min?.Height ?? 0);
+
+        int minWidth = Math.Min(frameWidth, floorWidth);
+        int minHeight = Math.Min(frameHeight, floorHeight);
 
         if (region.Width >= minWidth && region.Height >= minHeight)
         {
