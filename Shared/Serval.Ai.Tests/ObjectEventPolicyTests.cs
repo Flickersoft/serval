@@ -800,25 +800,247 @@ public class ObjectEventPolicyTests
         Assert.True(arrival.IsAlert);
     }
 
-    [Fact]
-    public void An_alert_is_decided_at_open_and_does_not_change_later()
+    /// <summary>
+    /// Well past <see cref="DetectionOptions.NoveltySeconds"/>, so a track first seen here counts as
+    /// something that turned up rather than as scenery the camera opened on.
+    /// </summary>
+    private static readonly DateTimeOffset Later = T0.AddSeconds(300);
+
+    /// <summary>
+    /// A policy whose watch clock has already started, so the next thing it sees is an arrival.
+    /// Several of the alert tests need that and nothing else from the setup.
+    /// </summary>
+    private static ObjectEventPolicy Watching(Action<DetectionOptions>? configure = null)
     {
-        // A record that quietly became an alert after someone read it would be worse than one that
-        // never claimed to be.
-        var policy = Policy(o =>
+        ObjectEventPolicy policy = Policy(configure);
+        policy.Observe([], T0);
+        return policy;
+    }
+
+    [Fact]
+    public void An_arrival_that_only_later_reaches_the_threshold_still_alerts()
+    {
+        // Scores a doorbell camera actually reported for a visitor walking up a path. They are
+        // furthest away and smallest on the frame that opens their episode, so judging only that
+        // frame turns examining them early into a penalty.
+        var policy = Watching(o =>
         {
             o.AlertClasses = ["person"];
-            o.AlertMinConfidence = 0.9f;
+            o.AlertMinConfidence = 0.6f;
+        });
+
+        ObjectEpisode opened = Assert.Single(
+            policy.Observe([At(1, "person", 0.557f, 0.44f, 0.49f, since: Later)], Later).Live);
+
+        Assert.True(opened.IsArrival);
+        Assert.False(opened.IsAlert);
+
+        ObjectEpisode second = Assert.Single(
+            policy.Observe(
+                [At(1, "person", 0.605f, 0.44f, 0.49f, since: Later)], Later.AddSeconds(1)).Live);
+
+        Assert.True(second.IsAlert);
+    }
+
+    [Fact]
+    public void The_alert_flag_is_set_once_and_never_cleared()
+    {
+        // One-way on purpose: a record that stopped being an alert after someone read it would be
+        // worse than one that never claimed to be.
+        var policy = Watching(o =>
+        {
+            o.AlertClasses = ["person"];
+            o.AlertMinConfidence = 0.6f;
+            o.ScoreThreshold = 0.25f;
             o.AbsenceSeconds = 5.0;
         });
 
-        policy.Observe([Seen(1, "person", 0.5f)], T0);
-        policy.Observe([Seen(1, "person", 0.99f)], T0.AddSeconds(2));
+        policy.Observe([At(1, "person", 0.4f, 0.7f, 0.6f, since: Later)], Later);
+        policy.Observe([At(1, "person", 0.95f, 0.7f, 0.6f, since: Later)], Later.AddSeconds(1));
+        policy.Observe([At(1, "person", 0.3f, 0.7f, 0.6f, since: Later)], Later.AddSeconds(2));
 
-        ObjectEpisode closed = policy.Observe([], T0.AddSeconds(30)).Published[0];
+        ObjectEpisode closed = Assert.Single(policy.Observe([], Later.AddSeconds(40)).Published);
+
+        Assert.True(closed.IsAlert);
+        Assert.Equal(0.95f, closed.PeakConfidence);
+    }
+
+    [Fact]
+    public void An_episode_that_never_reaches_the_threshold_never_alerts()
+    {
+        var policy = Watching(o =>
+        {
+            o.AlertClasses = ["person"];
+            o.AlertMinConfidence = 0.9f;
+            o.ScoreThreshold = 0.25f;
+            o.AbsenceSeconds = 5.0;
+        });
+
+        foreach (float score in new[] { 0.4f, 0.6f, 0.85f, 0.5f })
+        {
+            policy.Observe([At(1, "person", score, 0.7f, 0.6f, since: Later)], Later.AddSeconds(1));
+        }
+
+        ObjectEpisode closed = Assert.Single(policy.Observe([], Later.AddSeconds(40)).Published);
 
         Assert.False(closed.IsAlert);
-        Assert.Equal(0.99f, closed.PeakConfidence);
+    }
+
+    [Fact]
+    public void A_presence_that_is_not_an_arrival_never_alerts_however_confident()
+    {
+        // Eligibility is settled when the episode opens and no amount of later certainty revisits
+        // it. Without that guard a one-way confidence test would turn every piece of scenery into an
+        // alert the moment it happened to score well.
+        var policy = Policy(o =>
+        {
+            o.AlertClasses = ["person"];
+            o.AlertMinConfidence = 0.6f;
+        });
+
+        // In shot from the moment watching began, so nothing turned up.
+        policy.Observe([At(1, "person", 0.5f, 0.1f, 0.2f)], T0);
+
+        for (int i = 1; i <= 10; i++)
+        {
+            ObjectEpisode live = Assert.Single(
+                policy.Observe([At(1, "person", 0.99f, 0.1f, 0.2f)], T0.AddSeconds(i)).Live);
+
+            Assert.False(live.IsArrival);
+            Assert.False(live.IsAlert);
+        }
+    }
+
+    [Fact]
+    public void A_class_outside_the_alert_list_never_alerts()
+    {
+        var policy = Watching(o =>
+        {
+            o.AlertClasses = ["person"];
+            o.AlertMinConfidence = 0.6f;
+        });
+
+        ObjectEpisode live = Assert.Single(
+            policy.Observe([At(1, "car", 0.99f, 0.7f, 0.6f, since: Later)], Later).Live);
+
+        Assert.True(live.IsArrival);
+        Assert.False(live.IsAlert);
+    }
+
+    [Fact]
+    public void A_coasted_frame_cannot_raise_an_alert()
+    {
+        // Where the filter predicts, not where anything was seen. An alert must not fire on a frame
+        // nobody looked at, which is the same reason a coasted frame cannot set the peak.
+        var policy = Watching(o =>
+        {
+            o.AlertClasses = ["person"];
+            o.AlertMinConfidence = 0.6f;
+            o.ScoreThreshold = 0.25f;
+        });
+
+        policy.Observe([At(1, "person", 0.4f, 0.7f, 0.6f, since: Later)], Later);
+
+        ObjectEpisode coasted = Assert.Single(
+            policy.Observe(
+                [At(1, "person", 0.99f, 0.7f, 0.6f, TrackState.Coasting, Later)],
+                Later.AddSeconds(1)).Live);
+
+        Assert.False(coasted.IsAlert);
+
+        ObjectEpisode measured = Assert.Single(
+            policy.Observe(
+                [At(1, "person", 0.7f, 0.7f, 0.6f, since: Later)], Later.AddSeconds(2)).Live);
+
+        Assert.True(measured.IsAlert);
+    }
+
+    [Fact]
+    public void An_alert_carries_a_frame_at_or_above_the_threshold_it_fired_on()
+    {
+        // What the card shows and what the gate fired on are the same evidence. Without this an
+        // alert could display a confidence unrelated to the one it was judged at, and the number a
+        // reader sees would say nothing about why it fired.
+        var policy = Watching(o =>
+        {
+            o.AlertClasses = ["person"];
+            o.AlertMinConfidence = 0.6f;
+            o.ScoreThreshold = 0.25f;
+        });
+
+        policy.Observe([At(1, "person", 0.42f, 0.7f, 0.6f, since: Later)], Later);
+
+        ObjectEpisode alerting = Assert.Single(
+            policy.Observe(
+                [At(1, "person", 0.71f, 0.7f, 0.6f, since: Later)], Later.AddSeconds(1)).Live);
+
+        Assert.True(alerting.IsAlert);
+        Assert.NotNull(alerting.BestBox);
+        Assert.True(
+            alerting.BestBox!.Value.Score >= 0.6f,
+            $"alerted carrying a {alerting.BestBox.Value.Score:0.000} box, below the 0.600 it fired on");
+    }
+
+    [Fact]
+    public void A_continuation_of_an_alerting_presence_is_its_own_record()
+    {
+        // Deliberate: the hard cut ends one episode and starts another, and a new episode may raise
+        // its own alert. AlertService is idempotent on the episode id, so this is exactly what
+        // decides whether a long presence alerts once or hourly — asserted here because the ids are
+        // the mechanism and nothing else pins them.
+        var policy = Watching(o =>
+        {
+            o.AlertClasses = ["person"];
+            o.AlertMinConfidence = 0.6f;
+            o.ScoreThreshold = 0.25f;
+            o.MaxEpisodeSeconds = 60.0;
+        });
+
+        policy.Observe([At(1, "person", 0.9f, 0.7f, 0.6f, since: Later)], Later);
+
+        ObjectObservation cut = policy.Observe(
+            [At(1, "person", 0.9f, 0.7f, 0.6f, since: Later)], Later.AddSeconds(61));
+
+        ObjectEpisode first = Assert.Single(cut.Published);
+        ObjectEpisode second = Assert.Single(cut.Live);
+
+        Assert.True(first.IsAlert);
+        Assert.True(second.IsAlert);
+        Assert.NotEqual(first.Id, second.Id);
+    }
+
+    [Fact]
+    public void A_continuation_can_still_reach_a_threshold_its_first_episode_never_did()
+    {
+        // The hard cut at MaxEpisodeSeconds opens a fresh episode that is explicitly not an arrival.
+        // Eligibility is carried across it anyway, because it is a fact about the object that turned
+        // up and the clock running out does not unmake it — otherwise "at any point during its
+        // episode" would quietly stop holding at the cut.
+        var policy = Watching(o =>
+        {
+            o.AlertClasses = ["person"];
+            o.AlertMinConfidence = 0.6f;
+            o.ScoreThreshold = 0.25f;
+            o.MaxEpisodeSeconds = 60.0;
+        });
+
+        policy.Observe([At(1, "person", 0.4f, 0.7f, 0.6f, since: Later)], Later);
+
+        // Past the cut: the first episode closes below the threshold and a continuation opens.
+        ObjectObservation cut = policy.Observe(
+            [At(1, "person", 0.45f, 0.7f, 0.6f, since: Later)], Later.AddSeconds(61));
+
+        Assert.False(Assert.Single(cut.Published).IsAlert);
+
+        ObjectEpisode continuation = Assert.Single(cut.Live);
+        Assert.False(continuation.IsArrival);
+        Assert.False(continuation.IsAlert);
+
+        ObjectEpisode promoted = Assert.Single(
+            policy.Observe(
+                [At(1, "person", 0.8f, 0.7f, 0.6f, since: Later)], Later.AddSeconds(62)).Live);
+
+        Assert.True(promoted.IsAlert);
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using Serval.Ai;
 using Serval.Contracts;
 using Serval.Server.Cameras;
@@ -74,6 +75,11 @@ public sealed class CameraVisionPipeline : IDisposable
     /// <summary>The largest crop this camera may examine, or null when nothing bounds them. Resolved
     /// once alongside <see cref="_floorTiles"/> and constant for the same reason.</summary>
     private (int Width, int Height)? _maxRegion;
+
+    /// <summary>The smallest crop this camera may examine — the size below which reaching the detector
+    /// would mean enlarging it — or null when magnification is unbounded. Resolved and constant for the
+    /// reason <see cref="_maxRegion"/> is.</summary>
+    private (int Width, int Height)? _minRegion;
 
     /// <summary>The shape this camera's frames and crops are prepared to, resolved once
     /// <see cref="_prepared"/> exists and constant for as long as it does.</summary>
@@ -286,6 +292,7 @@ public sealed class CameraVisionPipeline : IDisposable
             }
 
             _maxRegion = _ai.Detection.Regions.MaxRegion(_input);
+            _minRegion = _ai.Detection.Regions.MinRegion(_input);
 
             // Said out loud because every part of it is a silent decision otherwise: `auto` resolving
             // crops to off leaves no trace, and a camera whose aspect found no good shape looks
@@ -300,22 +307,77 @@ public sealed class CameraVisionPipeline : IDisposable
             // The floor's own form is said out loud for the same reason the crop decision is: whether the
             // whole-frame pass is one shrunken look or a sweep of native-scale tiles is invisible
             // otherwise, and it is the difference between covering the frame and examining it.
-            string floor = _floorTiles is { Count: > 1 } tiles
-                ? $"tiled into {tiles.Count}"
-                : "one whole-frame pass";
+            // The tile's own geometry goes in beside the whole frame's, because the two picture figures
+            // next to each other are the whole argument for sweeping: a tile is the detector's shape
+            // clamped to the frame, so it arrives at native scale with the padding the shrunken look pays.
+            string floor;
+            if (_floorTiles is { Count: > 1 } tiles)
+            {
+                FrameRegion tile = tiles[0];
+                double tileFit = Math.Min(
+                    (double)_input.Width / tile.Width, (double)_input.Height / tile.Height);
+                double tilePicture =
+                    Math.Round(tile.Width * tileFit) * Math.Round(tile.Height * tileFit)
+                    / ((double)_input.Width * _input.Height);
+
+                // Stated as a cadence rather than left to be inferred from the tile count, because
+                // how often the sweep completes is what decides whether anything can be acquired at
+                // all: run whole it covers the frame every frame, spread it covers the frame once per
+                // FloorSeconds and only motion and tracks look in between.
+                string cadence = tiles.Count <= _ai.Detection.Regions.SweepAtOnce
+                    ? "all of them every frame"
+                    : string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"one per frame, the whole frame every {_ai.Detection.Regions.FloorSeconds:0.#} s");
+
+                // Formatted the way the whole frame's own figures are, so the two percentages sit
+                // side by side and can be compared without a second glance.
+                floor = string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"tiled into {tiles.Count} {tile.Width}x{tile.Height} tiles — "
+                    + $"{tilePicture:P0} picture at {tileFit:0.00}x, {cadence}");
+            }
+            else
+            {
+                floor = "one whole-frame pass";
+            }
 
             // The bound is reported as what it does to this camera rather than as the setting, because
             // the setting is a scale and the consequence is a size: on a frame that already fits inside
             // it nothing is ever cut, and saying "0.5" would leave an operator unable to tell which of
             // their cameras it touches.
             string bound = _maxRegion is { } max && (frame.Width > max.Width || frame.Height > max.Height)
-                ? $"crops bounded to {max.Width}x{max.Height}"
-                : "no crop is large enough to bound";
+                ? $"Crops bounded to {max.Width}x{max.Height}"
+                : "No crop is large enough to bound";
+
+            // The magnification limit, reported as the size it produces for the same reason the ceiling
+            // is. The third case is worth naming: a frame smaller than the input on both axes is already
+            // being enlarged before any crop is cut, so the limit cannot be honoured and this camera has
+            // been given a bigger input than it has pixels for.
+            string limit;
+            if (_minRegion is not { } min)
+            {
+                limit = "Crops have no magnification limit";
+            }
+            else
+            {
+                int floorWidth = Math.Min(frame.Width, min.Width);
+                int floorHeight = Math.Min(frame.Height, min.Height);
+                double limitScale = Math.Min(
+                    (double)_input.Width / floorWidth, (double)_input.Height / floorHeight);
+
+                limit = limitScale > _ai.Detection.Regions.MaxRegionScale
+                    ? $"The whole frame is already magnified {limitScale:0.00}x, so no crop here "
+                        + $"can hold to {_ai.Detection.Regions.MaxRegionScale:0.00}x"
+                    : $"Crops never smaller than {floorWidth}x{floorHeight}, so none is magnified "
+                        + $"past {limitScale:0.00}x";
+            }
 
             _logger.LogInformation(
                 "Camera {CameraId}: {Frame}x{FrameHeight} frames into a {Input}x{InputHeight} input "
                 + "— {Picture:P0} picture at {Fit:0.00}x scale. Region crops {State}, a "
-                + "{Gain:0.0}x gain on a distant subject (mode {Mode}). Floor: {Floor}. {Bound}.",
+                + "{Gain:0.0}x gain on a distant subject (mode {Mode}). Floor: {Floor}. {Bound}. "
+                + "{Limit}.",
                 _camera.Id,
                 frame.Width,
                 frame.Height,
@@ -327,7 +389,8 @@ public sealed class CameraVisionPipeline : IDisposable
                 RegionOptions.Gain(frame.Width, frame.Height, _input),
                 _ai.Detection.Regions.Mode,
                 floor,
-                bound);
+                bound,
+                limit);
         }
 
         // Motion is scored only when crops are being cut, because proposing where to cut them is the
@@ -360,7 +423,8 @@ public sealed class CameraVisionPipeline : IDisposable
             [.. _tracker!.Live],
             _floorTiles,
             _maxRegion,
-            (double)_input.Width / _input.Height);
+            (double)_input.Width / _input.Height,
+            _minRegion);
 
         if (planned.Count == 0)
         {
@@ -413,7 +477,10 @@ public sealed class CameraVisionPipeline : IDisposable
             }
         }
 
-        return found;
+        // Regions in one frame are allowed to overlap, so one object can be found once per region it
+        // falls in. Folded before the tracker rather than after, because the tracker's own answer to a
+        // second copy is a second track.
+        return admitted.Count > 1 ? OverlappingRegions.Fold(found) : found;
     }
 
     private IReadOnlyList<ObjectEpisode> Compare(Snapshot snapshot)

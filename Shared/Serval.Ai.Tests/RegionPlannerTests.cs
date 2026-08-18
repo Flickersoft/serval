@@ -235,8 +235,16 @@ public class RegionPlannerTests
     // A 3:4 doorbell into a landscape input: 0.75x across but 1.67x down, and the squeezed axis is
     // the one that decides. Reading width alone declines to crop the camera that needs it most.
     [InlineData(480, 640, 640, 384, RegionMode.Auto, true)]     // 1.67x on the vertical
-    // The same doorbell into a shape at its own aspect needs no crop to see properly.
+    // The same doorbell into a shape at its own aspect needs no crop to see properly, and at 1.15x it
+    // is the nearest case to the threshold on the declining side.
     [InlineData(480, 640, 416, 576, RegionMode.Auto, false)]    // 1.15x
+    // A 16:9 sub stream into a fixed square accelerator input, the shape a compiled 512² graph gives
+    // every camera. Declined, and this pair is the case the threshold exists for: with MaxRegionScale
+    // holding a crop to native scale the smallest crop here is 512x360 out of 640x360, four fifths of
+    // the frame, and cropping would cost the every-frame floor to buy it. TiledFloor is what gives
+    // these cameras native scale.
+    [InlineData(640, 360, 512, 512, RegionMode.Auto, false)]    // 1.25x
+    [InlineData(480, 640, 512, 512, RegionMode.Auto, false)]    // 1.25x, the doorbell's portrait of it
     public void Auto_decides_from_the_frame_to_input_ratio(
         int frameWidth, int frameHeight, int inputWidth, int inputHeight,
         RegionMode mode, bool expected)
@@ -778,6 +786,59 @@ public class RegionPlannerTests
     }
 
     [Fact]
+    public void A_piece_of_a_cut_region_is_never_below_the_floor()
+    {
+        // The preservation property that makes the floor an invariant rather than a suggestion. A
+        // region too large for the ceiling is cut into pieces sized by the ceiling, and because the two
+        // bounds cannot cross, a piece is never smaller than the floor. Without that, the last stage of
+        // the chain would quietly undo the first.
+        var options = Roomy();
+        options.MaxRegionScale = 1.0;
+        var input = new DetectorInput(320, 320, DetectorLayout.Uint8Nhwc, 1f);
+        (int Width, int Height)? min = options.MinRegion(input);
+
+        var planner = new RegionPlanner(options);
+        planner.Plan(Start, WideWidth, WideHeight, true, Still(), Grid, GridHeight, [], null, Bound, 0, min);
+
+        IReadOnlyList<PlannedRegion> planned = planner.Plan(
+            Start.AddSeconds(1), WideWidth, WideHeight, true, Moving(0, 0, Grid, GridHeight),
+            Grid, GridHeight, [], null, Bound, 0, min);
+
+        Assert.True(planned.Count > 1);
+        Assert.All(planned, region =>
+        {
+            Assert.True(
+                region.Region.Width >= Math.Min(WideWidth, min!.Value.Width),
+                $"a piece {region.Region.Width}px wide is under the {min!.Value.Width}px floor");
+            Assert.True(region.Region.Height >= Math.Min(WideHeight, min!.Value.Height));
+        });
+    }
+
+    [Fact]
+    public void Shaping_to_aspect_cannot_shrink_a_bounded_crop()
+    {
+        // Shaping only ever grows, so a crop already at the floor stays there whatever aspect it is
+        // asked to take. Checked with a square input against a 32:9 frame, which is the case where
+        // shaping moves a crop the most.
+        var options = Roomy();
+        options.MaxRegionScale = 1.0;
+        var input = new DetectorInput(320, 320, DetectorLayout.Uint8Nhwc, 1f);
+        (int Width, int Height)? min = options.MinRegion(input);
+
+        var planner = new RegionPlanner(options);
+        planner.Plan(Start, WideWidth, WideHeight, true, Still(), Grid, GridHeight, [], null, Bound, Square, min);
+
+        IReadOnlyList<PlannedRegion> planned = planner.Plan(
+            Start.AddSeconds(1), WideWidth, WideHeight, true, Moving(30, 20, 2, 2),
+            Grid, GridHeight, [], null, Bound, Square, min);
+
+        PlannedRegion only = Assert.Single(planned);
+
+        Assert.True(only.Region.Width >= min!.Value.Width);
+        Assert.True(only.Region.Height >= Math.Min(WideHeight, min!.Value.Height));
+    }
+
+    [Fact]
     public void Pieces_of_a_cut_region_stay_sheddable()
     {
         // Not cosmetic. InferenceScheduler reserves the floor and sweep tiles outside the budget and
@@ -874,6 +935,166 @@ public class RegionPlannerTests
         var options = new RegionOptions { MinRegionScale = 0 };
 
         Assert.Null(options.MaxRegion(new DetectorInput(320, 320, DetectorLayout.Uint8Nhwc, 1f)));
+    }
+
+    // ---- The magnification limit ----
+    //
+    // The mirror of the ceiling above, and the one that binds on ordinary cameras. A crop smaller than
+    // the input is enlarged to reach it, and enlarging does not add detail. Measured against a car found
+    // in all sixty of sixty whole frames at 0.906: at 1.25x still sixty, at 2x twenty-seven, at 2.75x
+    // none. So the floor is stated against the input rather than against the frame.
+
+    [Theory]
+    [InlineData(512, 512, 1.0, 512, 512)]
+    [InlineData(640, 384, 1.0, 640, 384)]
+    [InlineData(512, 512, 1.25, 410, 410)]
+    public void The_floor_is_the_input_divided_by_the_magnification_limit(
+        int inputWidth, int inputHeight, double limit, int expectedWidth, int expectedHeight)
+    {
+        var options = new RegionOptions { MaxRegionScale = limit };
+
+        (int Width, int Height)? min = options.MinRegion(
+            new DetectorInput(inputWidth, inputHeight, DetectorLayout.Uint8Nhwc, 1f));
+
+        Assert.Equal((expectedWidth, expectedHeight), min);
+    }
+
+    [Fact]
+    public void A_magnification_limit_of_zero_switches_the_floor_off()
+    {
+        var options = new RegionOptions { MaxRegionScale = 0 };
+
+        Assert.Null(options.MinRegion(new DetectorInput(512, 512, DetectorLayout.Uint8Nhwc, 1f)));
+    }
+
+    [Fact]
+    public void The_floor_can_never_exceed_the_ceiling()
+    {
+        // A configuration whose two bounds cross resolves in favour of the ceiling: it guards against a
+        // detector inventing objects, where the floor only guards against it missing them. Left to
+        // resolve itself the contradiction would come out differently depending on ordering — grown by
+        // Fit, refused by AddMerged, then cut back down by the split.
+        var options = new RegionOptions { MaxRegionScale = 0.5, MinRegionScale = 1.0 };
+        var input = new DetectorInput(512, 512, DetectorLayout.Uint8Nhwc, 1f);
+
+        (int Width, int Height)? min = options.MinRegion(input);
+        (int Width, int Height)? max = options.MaxRegion(input);
+
+        Assert.Equal(max, min);
+    }
+
+    [Fact]
+    public void A_crop_is_never_magnified_past_the_limit()
+    {
+        // Stated as the goal rather than as the mechanism, and measured the way FramePreparer measures
+        // it, so the assertion cannot drift from what the detector is actually shown.
+        var options = Options();
+        var input = new DetectorInput(512, 512, DetectorLayout.Uint8Nhwc, 1f);
+        var planner = new RegionPlanner(options);
+
+        planner.Plan(
+            Start, FrameWidth, FrameHeight, true, Still(), Grid, GridHeight,
+            [], null, options.MaxRegion(input), 1.0, options.MinRegion(input));
+
+        IReadOnlyList<PlannedRegion> planned = planner.Plan(
+            Start.AddSeconds(1), FrameWidth, FrameHeight, true, Moving(30, 20, 2, 2), Grid, GridHeight,
+            [], null, options.MaxRegion(input), 1.0, options.MinRegion(input));
+
+        PlannedRegion only = Assert.Single(planned);
+
+        double scale = Math.Min(
+            (double)input.Width / only.Region.Width, (double)input.Height / only.Region.Height);
+
+        Assert.True(
+            scale <= options.MaxRegionScale,
+            $"a {only.Region.Width}x{only.Region.Height} crop reaches a {input.Width}x{input.Height} "
+            + $"input at {scale:0.00}x, past the {options.MaxRegionScale:0.00}x limit");
+    }
+
+    [Fact]
+    public void The_floor_clamps_to_the_frame_and_still_holds()
+    {
+        // The counter-intuitive case. A 512x512 floor on a 360-tall frame cannot be honoured on the
+        // vertical, and does not need to be: a region's scale is the minimum over its two axes, so
+        // clamping the slack one costs nothing and 512x360 still reaches a 512x512 input at 1.00x.
+        var options = new RegionOptions { Mode = RegionMode.On, FloorSeconds = 5, MinCells = 4, PaddingFraction = 0 };
+        var input = new DetectorInput(512, 512, DetectorLayout.Uint8Nhwc, 1f);
+        var planner = new RegionPlanner(options);
+
+        planner.Plan(
+            Start, 640, 360, true, Still(), Grid, GridHeight,
+            [], null, options.MaxRegion(input), 1.0, options.MinRegion(input));
+
+        PlannedRegion only = Assert.Single(planner.Plan(
+            Start.AddSeconds(1), 640, 360, true, Moving(30, 20, 2, 2), Grid, GridHeight,
+            [], null, options.MaxRegion(input), 1.0, options.MinRegion(input)));
+
+        Assert.Equal(360, only.Region.Height);
+        Assert.True(only.Region.Width >= 512, $"crop was only {only.Region.Width}px wide");
+        Assert.InRange(only.Region.X + only.Region.Width, 0, 640);
+
+        double scale = Math.Min(
+            (double)input.Width / only.Region.Width, (double)input.Height / only.Region.Height);
+
+        Assert.Equal(1.0, scale, 3);
+    }
+
+    [Fact]
+    public void A_camera_with_enough_gain_is_untouched_by_the_limit()
+    {
+        // The compatibility guarantee. Where MinSizeFraction already floors a crop above the input, the
+        // limit has nothing to add and the plan is identical with and without it.
+        var options = Options();
+        var input = new DetectorInput(640, 384, DetectorLayout.FloatNchw);
+        (int Width, int Height)? max = options.MaxRegion(input);
+
+        var bounded = new RegionPlanner(options);
+        var unbounded = new RegionPlanner(options);
+
+        bounded.Plan(Start, 3840, 2160, true, Still(), Grid, GridHeight, [], null, max, 0, options.MinRegion(input));
+        unbounded.Plan(Start, 3840, 2160, true, Still(), Grid, GridHeight, [], null, max, 0);
+
+        IReadOnlyList<PlannedRegion> withLimit = bounded.Plan(
+            Start.AddSeconds(1), 3840, 2160, true, Moving(30, 20, 2, 2), Grid, GridHeight,
+            [], null, max, 0, options.MinRegion(input));
+
+        IReadOnlyList<PlannedRegion> without = unbounded.Plan(
+            Start.AddSeconds(1), 3840, 2160, true, Moving(30, 20, 2, 2), Grid, GridHeight,
+            [], null, max, 0);
+
+        Assert.Equal(without, withLimit);
+    }
+
+    [Fact]
+    public void A_track_crop_and_a_motion_crop_of_the_same_subject_agree_under_the_limit()
+    {
+        // The invariant MotionRegions.Fit exists for: a subject must be handed to the detector the same
+        // way whichever proposer named it, or it scores differently for no reason in the scene.
+        var options = Options();
+        var input = new DetectorInput(512, 512, DetectorLayout.Uint8Nhwc, 1f);
+        (int Width, int Height)? max = options.MaxRegion(input);
+        (int Width, int Height)? min = options.MinRegion(input);
+
+        // Cells 30-31 of 64 across, 20-21 of 48 down, as a normalised box.
+        var box = new BoundingBox(
+            30f / Grid, 20f / GridHeight, 2f / Grid, 2f / GridHeight);
+
+        var byMotion = new RegionPlanner(options);
+        byMotion.Plan(Start, FrameWidth, FrameHeight, true, Still(), Grid, GridHeight, [], null, max, 1.0, min);
+        PlannedRegion motion = Assert.Single(byMotion.Plan(
+            Start.AddSeconds(1), FrameWidth, FrameHeight, true, Moving(30, 20, 2, 2), Grid, GridHeight,
+            [], null, max, 1.0, min));
+
+        var byTrack = new RegionPlanner(options);
+        byTrack.Plan(Start, FrameWidth, FrameHeight, true, Still(), Grid, GridHeight, [], null, max, 1.0, min);
+        PlannedRegion track = Assert.Single(byTrack.Plan(
+            Start.AddSeconds(1), FrameWidth, FrameHeight, true, Still(), Grid, GridHeight,
+            [new TrackedObject(1, "person", box, 0.9f, TrackState.Confirmed, Start, Start, 3)],
+            null, max, 1.0, min));
+
+        Assert.Equal(RegionReason.Motion, motion.Reason);
+        Assert.Equal(RegionReason.Track, track.Reason);
+        Assert.Equal(motion.Region, track.Region);
     }
 
     // ---- Crops shaped to the detector's aspect ----

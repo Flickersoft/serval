@@ -20,6 +20,43 @@ public class ObjectTrackerTests
         new("person", score, new BoundingBox(x, y, 0.05f, 0.12f));
 
     [Fact]
+    public void A_subject_seen_on_alternate_frames_never_confirms()
+    {
+        // What a region plan that examines a subject every other frame costs, and the reason a tile
+        // sweep is not allowed to be the only thing looking: a tentative track is dropped the moment
+        // one frame passes without matching it, so its sightings never become consecutive and it never
+        // reaches confirmation. The filter would predict across the gap happily — the track does not
+        // survive to use it.
+        var tracker = new ObjectTracker(new TrackingOptions());
+
+        for (int frame = 0; frame < 12; frame++)
+        {
+            IReadOnlyList<TrackedObject> reported = frame % 2 == 0
+                ? tracker.Update([Person(0.5f, 0.5f)], At(frame))
+                : tracker.Update([], At(frame));
+
+            Assert.Empty(reported);
+        }
+
+        // Every one of the six sightings became its own one-frame ghost.
+        Assert.Equal(6, tracker.Ghosts);
+    }
+
+    [Fact]
+    public void A_subject_seen_on_consecutive_frames_confirms()
+    {
+        // The other half of the pair above, so the first reads as a statement about the sampling rate
+        // rather than about the tracker being unable to confirm anything at all.
+        var tracker = new ObjectTracker(new TrackingOptions());
+
+        Assert.Empty(tracker.Update([Person(0.5f, 0.5f)], At(0)));
+        Assert.Empty(tracker.Update([Person(0.5f, 0.5f)], At(1)));
+
+        Assert.NotEmpty(tracker.Update([Person(0.5f, 0.5f)], At(2)));
+        Assert.Equal(0, tracker.Ghosts);
+    }
+
+    [Fact]
     public void A_single_sighting_is_never_reported()
     {
         // The whole reason tentative tracks exist. A confident one-frame ghost is indistinguishable

@@ -109,18 +109,29 @@ services:
       Serval__Ai__Detection__ScoreThreshold: "0.40"
 
       # An EdgeTPU graph is compiled for one shape, so every camera shares it and a wide frame is
-      # squeezed hard. Tiling sweeps native-scale tiles instead of one shrunken whole-frame look, at one
-      # tile per frame so the guaranteed cost stays flat. Off by default and left off on hosts without
-      # an accelerator.
+      # squeezed hard. Tiling sweeps native-scale tiles instead of one shrunken whole-frame look. Off by
+      # default and left off on hosts without an accelerator.
       #
-      # Which cameras qualify depends on the input size, and a LARGER input can switch this off. At 320
-      # a 640x360 stream sits at exactly the 2.0x threshold and tiles; at 512 it arrives at 0.80x, a
-      # 1.3x gain that is under both this threshold and the one enabling region crops at all, so it
-      # takes a single whole-frame pass instead. Measured across a 6-camera site, that moved reserved
-      # tile work from about 12/s to about 3/s.
+      # At 512 a 640x360 stream arrives at 0.80x, a 1.25x gain, and tiles TWO ways: 512x360 each, at
+      # x=0 and x=128 because the last tile sits flush to the far edge, overlapping by 384px. Two is at
+      # or under Regions__SweepAtOnce, so the sweep runs WHOLE on every frame — the entire picture
+      # examined exactly as often as under the shrunken pass it replaces, at 1.00x instead of 0.80x and
+      # 70% picture instead of 56%. Measured on a living-room camera with a cat in plain view over 92
+      # frames, that geometry took animal detections from 4 frames to 15.
       #
-      # The catch: a camera with crops off runs its whole-frame pass EVERY frame, and that pass is
-      # Floor, which InferenceScheduler never sheds. Cheaper in total, less sheddable under pressure.
+      # A longer sweep — the 1536x432 panoramic here needs four tiles — goes one tile per frame,
+      # restarting every FloorSeconds. THAT schedule needs region crops on alongside it and
+      # RegionPlanner enforces it: it examines a given pixel once per cycle, and a tentative track dies
+      # the moment one frame misses it, so without retention crops a new object never confirms.
+      #
+      # Cost: a run-whole sweep is two reserved inferences per frame per camera where the shrunken pass
+      # was one, and InferenceScheduler never sheds reserved work. Five 2-tile cameras plus the
+      # panoramic is about 22/s at DetectFps=2 against the ~31/s this host is budgeted for — check the
+      # "Detection budget" line before adding cameras.
+      #
+      # Do NOT reach for Regions__AutoMinRatio to get native scale on these cameras: turning crops on
+      # drops the whole-frame pass from every frame to once per FloorSeconds, and the smallest crop
+      # here is 512x360 — four fifths of the frame. It costs the schedule and buys nothing.
       Serval__Ai__Detection__Regions__TiledFloor: "true"
 
       # Regions__MinRegionScale is left at its 0.5 default here on purpose. 0.75 was measured as the
@@ -128,6 +139,13 @@ services:
       # 0.60 four, 0.50 two, not monotonic — but that number belongs to that model. The YOLOv9 head
       # above never mistook the same object at any scale, so tightening the bound for it would cost
       # inference and buy nothing. Re-measure on any model swap rather than carrying a value across.
+      #
+      # Regions__MaxRegionScale is the other end of that pair and is left at 1.0, which means a crop is
+      # never enlarged to reach the input. This is the setting a fixed square input most needs: without
+      # it the smallest crop on a 640x360 stream at 512 is blown up 3.2x, and a 2.75x enlargement was
+      # measured to find nothing at all where the unenlarged whole frame found a car in all 60 of 60
+      # frames. It costs no magnification that was ever real — a crop still arrives at the camera's full
+      # gain over the whole-frame pass. Moving it wants the same batch of frames MinRegionScale does.
 
       # --- the vision model, on the iGPU ---------------------------------------------------
       Serval__Ai__Vision__Enabled: "true"

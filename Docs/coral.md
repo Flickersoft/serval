@@ -447,8 +447,8 @@ turn them off. Moving a 6-camera site from a 320 to a 512 input:
 | Camera | at 320 | at 512 |
 |---|---|---|
 | 1536x432 (32:9) | 0.21x, tiled into 12 | **0.33x, tiled into 4** |
-| 640x360 (16:9) | 0.50x, tiled into 6 | **0.80x, crops off, one whole-frame pass** |
-| 480x640 (3:4) | 0.50x, tiled into 6 | **0.80x, crops off, one whole-frame pass** |
+| 640x360 (16:9) | 0.50x, tiled into 6 | **0.80x, crops off; 2 tiles run whole with `TiledFloor`** |
+| 480x640 (3:4) | 0.50x, tiled into 6 | **0.80x, crops off; 2 tiles run whole with `TiledFloor`** |
 
 Reserved tile work fell from about 12/s to about 3/s at `DetectFps=2`, and the picture each camera is
 shown improved at the same time. **The catch:** with crops off, a whole-frame pass runs *every* frame
@@ -486,22 +486,59 @@ a fraction of a millisecond against tens for the inference, so measure before tr
 ## Input shape, and what tiling is for
 
 An EdgeTPU graph is compiled for **one** shape, so every camera shares it — the per-camera rectangular
-shapes the ONNX path uses cannot carry over. At 320×320 a 16:9 stream arrives at half scale and a 32:9
-panoramic at a fifth.
+shapes the ONNX path uses cannot carry over. And the shape is square, where cameras are not: at 320×320 a
+16:9 stream arrives at half scale and a 32:9 panoramic at a fifth.
 
-Region cropping helps by itself and needs no configuration: `RegionMode.Auto` turns on at a gain of 1.5,
-and a small input satisfies that comfortably. What it does not cover is the **floor pass** — the
-whole-frame look that guarantees acquisition of something that arrived while motion was blind. That pass
-covers every pixel at a scale which has already discarded the far field, so covering is not examining.
+**How much a small input buys depends on the input, and 512 is the awkward one.** At 320² a 640×360
+stream is squeezed to half, a 2.0x gain that `Regions:Mode = auto` takes without hesitation. At 512² the
+same stream arrives at 0.80x — a gain of only 1.25, and 56 % of the model's field is grey padding.
 
-`Regions:TiledFloor` replaces it with a rolling sweep of native-scale tiles, one tile per frame so the
-guaranteed cost stays flat. **Off by default and independent of `Regions:Mode`**, because it changes how
-the coverage guarantee itself is made and must not arrive as a side effect of anything else.
+**Cropping is the wrong tool for that 1.25x.** With `Regions:MaxRegionScale` holding a crop to native
+scale, the smallest crop such a camera can cut is the detector's own input — a 512×360 window out of a
+640×360 frame, four fifths of the picture. Turning crops on also moves the whole-frame pass from every
+frame to once per `Regions:FloorSeconds`. That trades the acquisition guarantee for a close-up which is
+not one, which is why `Regions:AutoMinRatio` is 1.5 and must not be lowered to admit these cameras.
 
-**It is a standing cost on a wide camera, not an occasional one.** A 1536×432 frame needs 12 tiles at a
-320 input, which is 6 seconds at 2 fps — longer than the default 5 s `FloorSeconds`, so that camera's
-sweeps run back-to-back at one reserved inference per frame. That is the honest reading of the guarantee,
-and it is why this wants an accelerator behind it rather than four CPU cores.
+The 512×360 window is still the right *picture*: measured on a living-room camera with a cat in plain
+view, over 92 frames, it took animal detections from 4 frames to 15 and produced the first cat
+detections that camera had registered. `Regions:TiledFloor` delivers it without touching the schedule.
+
+What cropping does not cover is the **floor pass** — the whole-frame look that guarantees acquisition of
+something that arrived while motion was blind. That pass covers every pixel at a scale which has already
+discarded the far field, so covering is not examining.
+
+`Regions:TiledFloor` replaces it with a sweep of native-scale tiles. **Off by default**, because it
+changes how the coverage guarantee itself is made and must not arrive as a side effect of anything else.
+`Regions:TiledFloorMinGain` is 1.2 — read it as "does tiling buy any scale at all", not as a cost guard,
+because tile count *grows* with the squeeze and so a minimum-gain threshold admits the expensive cameras.
+
+**The sweep runs on one of two schedules, and they make different promises.**
+
+A sweep of at most `Regions:SweepAtOnce` tiles — 2 by default, which is what a 16:9 camera costs against
+a square input — is run **whole, on every frame**. Every pixel is then examined exactly as often as under
+the single shrunken pass it replaces, at native scale instead. That is a strict improvement, it needs
+nothing alongside it, and it is what the 640×360 and 480×640 cameras get.
+
+A longer sweep is spread **one tile per frame**, restarting every `Regions:FloorSeconds`, so the
+guaranteed cost stays at one inference per frame. This one **needs `Regions:Mode` on alongside it, and
+the planner enforces that**: it examines a given pixel once per cycle, and `ObjectTracker` drops a
+tentative track the moment one frame passes without matching it, so a new object seen that rarely never
+confirms and never becomes an episode. Cropping is what bridges the gap — a retention crop is planned for
+every *live* track, tentative ones included, and re-sights the subject on the frames the sweep is looking
+elsewhere. The panoramic runs this way.
+
+Because a sweep run whole examines overlapping tiles in the same frame, one object is found once per tile
+it falls in; `OverlappingRegions.Fold` reduces those to the best copy before the tracker sees them, since
+the tracker's own answer to a second copy is a second track.
+
+**Cost is very different at the two ends, and the tile geometry is why.** A 1536×432 frame needs 12
+tiles at a 320 input — 6 seconds at 2 fps, longer than the default 5 s `FloorSeconds`, so that camera's
+sweeps run back-to-back at one reserved inference per frame. A 640×360 frame at 512² needs **two**, and
+because the last tile sits flush to the far edge they are 512-wide tiles at x=0 and x=128, overlapping by
+384 px. Run whole, that is two reserved inferences per frame instead of one — the only place in this
+design where the guarantee gets more expensive, and the reason `SweepAtOnce` is a setting rather than a
+constant. At `DetectFps=2` it is 4/s per camera; check it against the `Detection budget` line, which
+reports what the host was measured at.
 
 `Regions:TileOverlapFraction` is not a tuning nicety: an object lying across a tile boundary is cut in
 two and detected as neither half. It has to exceed the largest thing worth finding as a share of a tile.

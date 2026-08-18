@@ -140,6 +140,11 @@ public sealed class ObjectEventPolicy
         public int FrameCount;
         public List<TrackSample> Track = [];
         public bool IsAlert;
+
+        /// <summary>Whether this episode is the kind that may raise an alert, leaving only the
+        /// question of whether it is ever seen clearly enough. Settled when the episode opens.</summary>
+        public bool IsAlertEligible;
+
         public bool IsArrival;
     }
 
@@ -412,6 +417,24 @@ public sealed class ObjectEventPolicy
                     open.PeakFrameAt = now;
                     open.BestBox = box;
                 }
+
+                // The confidence half of the alert decision, re-asked until it passes and then never
+                // again. An alert says a thing of this class turned up and was at some point seen
+                // this clearly; which frame carried that certainty is a property of the detection
+                // schedule rather than of what happened.
+                //
+                // Judging only the opening frame would penalise examining a subject early: the first
+                // look at an arrival is the one where they are furthest away and smallest, so a
+                // visitor walking up a path is least convincing in the moment they appear.
+                //
+                // Inside `measured` for the reason the peak update is: a coasting track is where the
+                // filter predicts, and an alert must not fire on a frame nobody looked at.
+                if (!open.IsAlert
+                    && open.IsAlertEligible
+                    && track.Score >= _options.AlertMinConfidence)
+                {
+                    open.IsAlert = true;
+                }
             }
 
             AppendTrack(open.Track, now, box);
@@ -442,6 +465,12 @@ public sealed class ObjectEventPolicy
                     BestBox = box,
                     FrameCount = 1,
                     IsAlert = open.IsAlert,
+
+                    // Carried across, unlike IsArrival: eligibility is a fact about the object that
+                    // turned up and the clock running out does not unmake it. A presence not yet seen
+                    // clearly enough when it was cut must still be able to earn its alert afterwards,
+                    // which is also why this is stored rather than derived from IsArrival.
+                    IsAlertEligible = open.IsAlertEligible,
                     IsArrival = false,
                 };
 
@@ -758,17 +787,15 @@ public sealed class ObjectEventPolicy
     {
         bool isArrival = IsArrival(track);
 
-        // An alert is decided once, when the episode opens, and does not change afterwards. A
-        // record that quietly became an alert twenty seconds after someone read it would be worse
-        // than one that never claimed to be.
+        // Whether this episode may raise an alert at all — the half of the decision settled here,
+        // because neither part can become more true later. Whether it was ever seen clearly enough is
+        // asked on every measured frame until it passes.
         //
-        // Only an arrival can be one. Presence is not news — the scenery a camera opened on and a
+        // Only an arrival qualifies. Presence is not news — the scenery a camera opened on and a
         // thing that came back to where it just left are both already known about — and an alert
         // that fires on them is the whole feed. IsArrival is the question this file exists to
         // answer, and the alert flag is the one consumer that most needs the answer.
-        bool isAlert = isArrival
-            && _alerts.Contains(track.Label)
-            && track.Score >= _options.AlertMinConfidence;
+        bool isEligible = isArrival && _alerts.Contains(track.Label);
 
         // Where the previous episode of this same track ended, if it had one.
         DateTimeOffset? previous =
@@ -804,7 +831,12 @@ public sealed class ObjectEventPolicy
                 // ago — carrying its lifetime total across would restate every frame the first
                 // episode already reported.
                 FrameCount = previous is null ? Math.Max(track.Hits - 1, 0) : 0,
-                IsAlert = isAlert,
+
+                // Never set here, even well above the threshold: the frame that opens an episode is
+                // processed by the promoting pass immediately after this returns, so a confident
+                // arrival still alerts on its opening frame and the test lives in one place.
+                IsAlert = false,
+                IsAlertEligible = isEligible,
                 IsArrival = isArrival,
             },
         };

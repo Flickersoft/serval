@@ -350,6 +350,10 @@ pays for a deployment that also crops. If distant subjects are being missed, rai
 detect stream *and* leave `Detection:Regions:Mode` at `auto`; raising either alone does nothing. The
 measurements behind that are in [detection.md](detection.md#what-this-is-actually-worth-measured).
 
+Raising the stream also raises the *honest* magnification available, which is what a crop can actually
+deliver: `Detection:Regions:MaxRegionScale` holds a crop at native scale, so the ceiling on a crop's
+magnification is exactly the frame-to-input gain, and a bigger stream is the only thing that moves it.
+
 `Ingest:DetectFrameDir` (default `/dev/shm/serval/detect`) is where they are staged, and **it must be
 tmpfs**. Frames are written and deleted within milliseconds; on a real filesystem that is continuous
 churn on the device holding the recordings, for no benefit. Both compose files mount it; the Server

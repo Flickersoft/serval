@@ -106,7 +106,13 @@ and it is about recall, not speed.**
 
 So on each frame `RegionPlanner` builds a short list of places to look:
 
-1. **The floor** — the whole frame, every `Regions:FloorSeconds`, unconditionally.
+1. **The floor** — the whole frame. **How often depends on whether crops are on, and this is the
+   single most consequential thing in the planner.** With crops off it is *every frame*; with them on
+   it drops to once every `Regions:FloorSeconds`, and motion and track crops carry the time in
+   between. Where `Regions:TiledFloor` is on and the camera is squeezed enough to earn it, the pass
+   becomes a native-scale sweep: run whole on every frame if it is at most `Regions:SweepAtOnce`
+   tiles, otherwise one tile per frame on the `FloorSeconds` interval. See
+   [the tiled floor](#a-region-has-a-ceiling-a-floor-and-a-magnification-limit) and `coral.md`.
 2. **Tracks** — a crop around each live track's predicted position, whether or not anything moved
    there, so something already known about keeps being seen after it stops moving.
 3. **Motion** — a crop around each cluster of changed cells, at native resolution, capped by
@@ -128,6 +134,29 @@ whole-frame change is correctly rejected as *not* movement) and has not moved si
 proposes nothing returns nothing, and the policy is not told — an observation nobody made must not
 close an episode.
 
+#### The floor has to be able to confirm a track on its own
+
+The rule that ties the planner to the tracker, and the one that is easiest to break without noticing:
+**a subject must be examined on enough *consecutive* frames for a track to confirm.** `ObjectTracker`
+drops a tentative track the moment one frame passes without matching it, and will not confirm before
+`Tracking:ConfirmSeconds` — 1.0 s, so three consecutive frames at 2 fps. A schedule that looks
+somewhere else in between produces no episodes at all, however good each individual look was.
+
+That divides floors into two kinds, and it is worth knowing which one a camera has:
+
+| Floor | What a still subject waits | Acquires on its own? |
+|---|---|---|
+| Whole frame every frame (crops off) | `ConfirmSeconds` | Yes |
+| Sweep of at most `SweepAtOnce` tiles, run whole every frame | `ConfirmSeconds` | Yes |
+| Whole frame every `FloorSeconds` (crops on) | up to `FloorSeconds` + `ConfirmSeconds` | Only with motion crops alongside |
+| Sweep spread one tile per frame | up to `FloorSeconds` + the sweep | Only with motion crops alongside |
+
+The bottom two are not defects — they are the trade a camera makes when a crop is genuinely a close-up.
+They become one when a camera is moved into them for no gain, which is what `AutoMinRatio` at 1.5 and
+`SweepAtOnce` at 2 prevent. `AcquisitionTests` asserts the budgets in that table by driving the real
+planner against the real tracker: this is a property of the two together, and each is correct alone
+while the pair detects nothing.
+
 **Crops only pay when frames are much larger than the model's input**, and the governing number is
 just the ratio of the two:
 
@@ -135,8 +164,22 @@ just the ratio of the two:
 |---|---|---|---|
 | 1080p | 320² | ~3.4x | clearly worth it |
 | 720p | 320² | ~2.25x | worth it |
-| 1080p | 640² | ~1.7x | marginal |
+| 1080p | 640² | ~1.7x | worth it |
+| 640x360 | 512² (a compiled accelerator graph) | 1.25x | not worth it — see below |
 | 720p | 640² | ~1.1x | pointless |
+
+`Regions:AutoMinRatio` is where that verdict is drawn, at 1.5x. **The gain is the whole of what a crop
+can honestly deliver**, because `Regions:MaxRegionScale` holds a crop's scale at 1.0 —
+see [the magnification limit](#and-a-magnification-limit-which-is-the-one-that-bites).
+
+**Why the 1.25x row is declined, which is not obvious.** Two things follow from holding a crop to native
+scale. The smallest crop on such a camera is the detector's own input — 512x360 out of a 640x360 frame,
+four fifths of the picture, which is not a close-up. And turning crops on moves the whole-frame pass
+from every frame to once per `FloorSeconds`. Spending the acquisition guarantee on that is a straight
+loss, measured as one: on a real fleet it took a driveway's episode count to zero.
+
+Such a camera wants native scale *without* the schedule change, which is `Regions:TiledFloor` —
+it replaces the whole-frame pass rather than thinning it.
 
 #### What this is actually worth, measured
 
@@ -231,10 +274,27 @@ too, so growing the slack axis to that ratio lands at most on the bound's own va
 crop inside the bound cannot be shaped out of it. Shaping happens before any oversized region is cut,
 since a piece is already the bound's shape and it is the region it came from that decides coverage.
 
-### A region has a ceiling as well as a floor
+**And it cannot breach the magnification limit either**, for the simpler reason that shaping only ever
+grows: a crop already at or above the limit's floor stays there. The floor is applied first, in the same
+`Fit` that grows a crop to `MinSizeFraction`, so a track crop and a motion crop of the same subject are
+bounded identically — which is the invariant `Fit` exists for.
 
-`Regions:MinSizeFraction` stops a crop being too tight to recognise anything in.
-`Regions:MinRegionScale` stops one being so large that it has to be shrunk past the point where the
+### A region has a ceiling, a floor, and a magnification limit
+
+Three guards, in two different units, answering three different questions. Confusing them is easy and
+the units are why:
+
+| Guard | Default | Units | Stops |
+|---|---|---|---|
+| `Regions:MinSizeFraction` | 0.25 | fraction of the frame | a crop too tight to hold the object *and its surroundings* |
+| `Regions:MaxRegionScale` | 1.0 | scale against the input | a crop being **enlarged** — resolution that is not there |
+| `Regions:MinRegionScale` | 0.5 | scale against the input | a crop so large it is shrunk past where the model invents things |
+
+`MinSizeFraction` and `MinRegionScale` are *not* a pair, despite reading like one. The first is a share
+of the frame and cannot express "too tight for this detector"; the pair in the same units is
+`MaxRegionScale` and `MinRegionScale`, which bracket the scale a region may reach the input at.
+
+`Regions:MinRegionScale` stops a region being so large that it has to be shrunk past the point where the
 detector is reliable. Below that point a small model does not merely miss things — it invents them.
 
 Tested on an SSD MobileDet at 320² on an Edge TPU, against a static garden ornament on a 1536x432
@@ -269,6 +329,70 @@ the hard case and wants 0.75; a dynamic-shape ONNX export on the same camera doe
 six frames put 0.5, 0.6 and 0.66 all in the failing range, and the counts are not monotonic between
 them. Anything derived from this needs a batch of frames across the day's light rather than a fixture,
 and the same is true of any future model swap measured the same way.
+
+#### And a magnification limit, which is the one that bites
+
+The ceiling above is about crops that are too *large*. The limit below is about crops that are too
+*small*, and it reaches far more cameras — because a crop smaller than the detector's input has to be
+enlarged to fill it, and enlarging is interpolation. It adds pixels, not detail.
+
+Measured on a 640x360 sub stream, a car found in **all sixty of sixty** whole frames at 0.906 mean
+confidence, varying nothing but how tightly the crop around it was taken:
+
+| `MinSizeFraction` | Crop scale | Found again | Mean confidence |
+|---|---|---|---|
+| whole frame | 1.00x | 60 of 60 | 0.906 |
+| 0.80 | **1.25x** | 60 of 60 | **0.918** |
+| 0.75 | 1.33x | 60 of 60 | 0.862 |
+| 0.70 | 1.43x | 59 of 60 | 0.710 |
+| 0.65 | 1.54x | 59 of 60 | 0.680 |
+| 0.60 | 1.67x | 59 of 60 | 0.649 |
+| 0.50 | 2.00x | 27 of 60 | 0.420 |
+| **0.25** | **2.75x** | **none** | — |
+
+Monotonic, and past about 1.25x every crop is worse than not cropping at all. The gentlest one is the
+only one that beats the whole frame, and it does that by trimming letterbox padding rather than by
+magnifying.
+
+**Why `MinSizeFraction` cannot express this.** It is a share of the frame, so what it means in scale
+depends on the camera:
+
+```
+crop scale = 1 / (Gain x MinSizeFraction)
+```
+
+At the default that is `4 / Gain` — so the smallest crop is *enlarged* on every camera under 4x gain,
+which is nearly all of them. `Mode = Auto` admits from 1.5x upward, so most of the admitted range was
+inside the enlarging band. Note the closed form assumes the crop is not clamped to the frame; where it
+is, the real figure is gentler, which is why the 640x360 measurement above shows 2.75x where the
+formula says 4.0.
+
+`Regions:MaxRegionScale` states the guard where it belongs, against the input:
+
+- **1.0, the default** — a crop is never enlarged, only ever shrunk.
+- It **costs no magnification that was ever real.** A crop's magnification over the whole-frame pass is
+  its scale divided by the whole frame's fit, so holding scale at 1.0 leaves the maximum at exactly
+  `Gain`: all of the detail the camera has over the input, and none of the invented kind.
+- It **clamps to the frame**, and usually holds anyway. A 512x512 floor on a 640x360 frame gives
+  512x360, which still reaches a 512x512 input at 1.00x — because a region's scale is the *minimum*
+  over its two axes, so clamping the slack one costs nothing.
+- The one case it cannot honour is a frame smaller than the input on **both** axes: the whole picture
+  is already being enlarged before any crop is cut. The per-camera startup line says so in as many
+  words, because it means the deployment has given that camera a larger input than it has pixels for.
+
+What it changes, per camera:
+
+| Frame → input | Gain | Crop before | Scale | Crop after | Scale |
+|---|---|---|---|---|---|
+| 1536x432 → 512² | 3.0 | 384x384 | 1.33x | **512x432** | **1.00x** |
+| 1920x1080 → 640x384 | 3.0 | 480x288 | 1.33x | **640x384** | **1.00x** |
+| 640x360 → 512² | 1.25 | 160x160 | 3.20x | **512x360** | **1.00x** |
+| 3840x2160 → 640x384 | 6.0 | 960x576 | 0.67x | 960x576 | **unchanged** |
+
+The 4K row is the compatibility guarantee: where `MinSizeFraction` already floors the crop above the
+input, the limit has nothing to add. It is also where the remaining headroom is — that camera has 6x of
+real detail and takes 4x, so `MinSizeFraction` is what caps it now. Lowering that is safe under the
+limit and wants its own measurement.
 
 **What went wrong without it was a runaway, not a near miss.** A union is itself a region, so unions
 chain: three subjects spread across a wide frame are enough, because the first union reaches far
@@ -398,9 +522,30 @@ and obvious in the database.
 
 `AlertClasses` is what the alert queue is filled from: an episode that passes all three conjuncts
 becomes a row on the Alerts screen with a preview clip cut around it. See
-[alerts.md](alerts.md) — including the part that matters here, which is that an alert is raised when
-the episode **opens** rather than when it closes, so `AlertClasses` and `AlertMinConfidence` decide
+[alerts.md](alerts.md) — including the part that matters here, which is that an alert is raised while
+the episode is **open** rather than when it closes, so `AlertClasses` and `AlertMinConfidence` decide
 something a person sees within seconds rather than after `AbsenceSeconds`.
+
+#### The alert rule
+
+> An **arrival** of a class in `AlertClasses`, which at any point during its episode is seen with
+> confidence at or above `AlertMinConfidence`, raises **exactly one alert for that episode**.
+
+- **Arrival only.** Presence is not news — the scenery a camera opened on, and a thing that came back
+  to where it just left, are both already known about. `NoveltySeconds` is what draws that line.
+- **Ever, not first.** The confidence test is re-asked on every measured frame until it passes, then
+  never again. Judging only the opening frame would penalise examining a subject early: the first look
+  at someone walking up a path is the one where they are furthest away and smallest, so a real visitor
+  can open below the threshold and be well above it seconds later.
+- **Once per episode.** Repeated raises inside one episode collapse — `AlertService` is idempotent on
+  the episode id. An episode continued past `MaxEpisodeSeconds` is a *new* episode and may raise its
+  own alert; eligibility is carried across that cut so a presence not yet seen clearly enough can
+  still earn one afterwards.
+
+The flag is one-way: a record that stopped being an alert after somebody read it would be worse than
+one that never claimed to be, and there is no matching harm in one that earns the claim a second late.
+A consequence worth knowing when reading records is that an alert's `BestBox` score is always at or
+above the threshold it fired on, so the number shown and the number judged agree.
 
 ### Masks
 

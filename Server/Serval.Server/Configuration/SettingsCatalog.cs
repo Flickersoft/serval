@@ -550,20 +550,40 @@ public static class SettingsCatalog
             + "in the log.",
             SettingKind.Choice, Choices: ["auto", "on", "off"]),
 
+        new("Serval:Ai:Detection:Regions:AutoMinRatio", GroupAi, "Zoom in when a crop would be at least",
+            "What 'auto' above decides on: how much bigger a subject arrives in a close-up than in the "
+            + "whole picture shrunk to fit the model. Lowering it does more than add close-ups — once "
+            + "they are on, the whole picture is checked every few seconds instead of every frame. On a "
+            + "camera with little to recover that buys close-ups which are nearly the whole picture "
+            + "anyway, so below about 1.5 it costs more than it finds.",
+            SettingKind.Number, Min: 1, Max: 8, Unit: "x", Advanced: true),
+
         new("Serval:Ai:Detection:Regions:TiledFloor", GroupAi,
             "Check the picture in overlapping squares",
             "How the guaranteed whole-frame look is made. Off, it is one pass with the frame shrunk to "
             + "fit the model — which covers every pixel but, on a wide camera squeezed hard, at a scale "
-            + "that has already lost the far field. On, it sweeps native-scale tiles instead, one per "
-            + "frame. Costs several inferences where the shrunken look costs one, so it wants an "
-            + "accelerator behind it. Only engages on cameras squeezed past the threshold below.",
+            + "that has already lost the far field. On, it checks native-scale tiles instead. A short "
+            + "sweep is checked all at once every frame; a longer one takes a tile at a time, and that "
+            + "one also needs zooming in on movement, because it looks at the edges of the picture only "
+            + "once a pass and a new object seen that rarely is never confirmed. Only engages on "
+            + "cameras squeezed past the threshold below.",
             SettingKind.Bool, RestartRequired: true, Advanced: true),
 
         new("Serval:Ai:Detection:Regions:TiledFloorMinGain", GroupAi, "Tile the floor above",
             "How much the frame has to be shrunk before tiling is worth it, as the same magnification "
             + "ratio that decides cropping. A camera already arriving near full scale gains nothing "
-            + "from tiles and would pay several inferences for it.",
+            + "from tiles. Note this asks whether tiling buys anything, not what it costs: a camera "
+            + "squeezed harder needs more tiles, so a low threshold admits the cheap cameras rather "
+            + "than the expensive ones.",
             SettingKind.Number, RestartRequired: true, Min: 1, Max: 10, Unit: "x", Advanced: true),
+
+        new("Serval:Ai:Detection:Regions:SweepAtOnce", GroupAi, "Examine a whole sweep in one frame up to",
+            "A short sweep is checked all at once, every frame, covering the picture exactly as often "
+            + "as the single shrunken look it replaces and in full detail. A longer one goes a tile at "
+            + "a time, covering the picture only once every few seconds and leaning on movement in "
+            + "between. Two tiles is what an ordinary 16:9 camera costs; raising this multiplies the "
+            + "guaranteed work every affected camera does, so check the detection budget afterwards.",
+            SettingKind.Number, Min: 1, Max: 8, Unit: "tiles", Advanced: true),
 
         new("Serval:Ai:Detection:Regions:TileOverlapFraction", GroupAi, "Tile overlap",
             "How much neighbouring tiles share. Not a nicety: an object lying across a tile boundary is "
@@ -603,6 +623,17 @@ public static class SettingsCatalog
             + "scale and called a person below it, more confidently the further it shrank. A crop "
             + "bigger than this is examined in overlapping pieces instead. Zero switches it off.",
             SettingKind.Number, Min: 0, Max: 1, Advanced: true),
+
+        new("Serval:Ai:Detection:Regions:MaxRegionScale", GroupAi, "Never magnify a crop past",
+            "A crop smaller than the model's input has to be blown up to fill it, and blowing a picture "
+            + "up does not add detail — it invents it. Measured against a car found in all sixty of "
+            + "sixty whole frames: at 1.25x it was still found in all sixty, at 2x in twenty-seven, and "
+            + "at 2.75x — what the smallest crop above asks for on an ordinary camera — in none at all. "
+            + "1 means a crop is never enlarged, only ever shrunk, and costs no magnification that was "
+            + "ever real. A camera whose pictures are smaller than the model's input cannot honour this, "
+            + "because the whole picture is already being enlarged before any crop is cut. Zero switches "
+            + "it off.",
+            SettingKind.Number, Min: 0, Max: 4, Unit: "x", Advanced: true),
 
         // ---- Following objects between frames ----------------------------------------------------
         new("Serval:Ai:Detection:Tracking:ConfirmSeconds", GroupObjects, "Believe it after",
@@ -694,7 +725,10 @@ public static class SettingsCatalog
 
         new("Serval:Ai:Detection:AlertMinConfidence", GroupObjects, "How sure it must be to alert",
             "Deliberately higher than the ordinary floor. A false record costs a row in a feed; a "
-            + "false alert costs trust in every alert after it.",
+            + "false alert costs trust in every alert after it. Something that turns up raises one "
+            + "alert as soon as it is seen this clearly, at whatever point in the sighting that "
+            + "happens — a visitor walking up a path is smallest and least certain in the moment they "
+            + "first appear.",
             SettingKind.Number, Min: 0, Max: 1),
 
         new("Serval:Ai:Detection:AbsenceSeconds", GroupObjects, "Consider it gone after",
