@@ -86,11 +86,12 @@ jobs:
       # this log.
       - run: dotnet build Serval.slnx -warnaserror "-warnnotaserror:NU1901;NU1902;NU1903;NU1904"
 
-      # --no-build, so this step measures the tests rather than re-proving the build above it and so
-      # a warning cannot be counted twice. The two steps therefore have to stay in the same
-      # configuration — adding -c Release to one alone makes this one fail looking for assemblies
-      # that were never written. Two steps rather than one because the checks list should say which
-      # of "it does not compile" and "it does not work" happened.
+      # This step builds what it runs. That is the point of it: a test run is a claim about the tree
+      # in front of it, and skipping the build hands that claim to whatever was compiled last. The
+      # cost is that the build above is repeated — MSBuild is incremental, so it is seconds — and
+      # that a warning appears in two logs, which is noise rather than a second gate, since only the
+      # step above passes -warnaserror. Two steps rather than one because the checks list should say
+      # which of "it does not compile" and "it does not work" happened.
       #
       # The runner is Microsoft.Testing.Platform, named by the "test" section of the root
       # global.json — xunit.v3 4 hosts itself and ships no VSTest adapter, and `dotnet test` still
@@ -103,7 +104,7 @@ jobs:
       # shared four-core runner is bad at. They still run for anyone who has ffmpeg, which is where
       # they were going to run anyway. `sudo apt-get install -y ffmpeg` is the whole change if that
       # trade stops being the right one.
-      - run: dotnet test Serval.slnx --no-build
+      - run: dotnet test Serval.slnx
 
   flutter:
     runs-on: ubuntu-latest
