@@ -8,12 +8,13 @@
     <!-- Like the CameraModule suite: these tests touch no MongoDB, no ffmpeg, no filesystem
          video — only the decidable, in-memory pieces. Live infra is verified by the run-through
          in the plan, not here. -->
+    <!-- Executable for the reason spelled out in Shared/Serval.Ai.Tests: an xunit.v3 suite hosts
+         itself. -->
+    <OutputType>Exe</OutputType>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
-    <PackageReference Include="xunit.v3" Version="3.2.2" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0" />
+    <PackageReference Include="xunit.v3" Version="4.0.0" />
   </ItemGroup>
 
   <ItemGroup>

@@ -120,9 +120,9 @@ class _ServerScreenState extends ConsumerState<ServerScreen> {
   }
 
   Future<void> _restore() async {
-    final FilePickerResult? picked;
+    final PlatformFile? file;
     try {
-      picked = await FilePicker.pickFiles(
+      file = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: const ['json'],
       );
@@ -132,7 +132,6 @@ class _ServerScreenState extends ConsumerState<ServerScreen> {
       return;
     }
 
-    final file = picked?.files.singleOrNull;
     final bytes = await file?.readAsBytes();
     if (bytes == null || !mounted) return;
 

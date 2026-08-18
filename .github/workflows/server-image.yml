@@ -132,4 +132,4 @@ jobs:
           # do not appear in the tag list a deployment picks an image from.
           cache-from: type=registry,ref=${{ steps.cache.outputs.ref }}
           cache-to: type=registry,ref=${{ steps.cache.outputs.ref }},mode=max,image-manifest=true,oci-mediatypes=true
-d
+          
