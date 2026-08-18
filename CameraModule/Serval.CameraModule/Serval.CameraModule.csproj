@@ -38,15 +38,17 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <!--
-      Direct reference only to lift the native SQLite build past GHSA-2m69-gcr7-jv3q, which the
-      2.1.11 that Microsoft.Data.Sqlite resolves to still carries. Nothing here calls into it —
-      remove this line once Microsoft.Data.Sqlite resolves 2.1.12 or later on its own.
+      Direct reference only to keep the native SQLite build ahead of GHSA-2m69-gcr7-jv3q. Nothing
+      here calls into it. Microsoft.Data.Sqlite now resolves the bundle at 2.1.12, which clears the
+      advisory on its own, so this line is a one-patch lead rather than the fix it started as and
+      can go whenever that lead stops being worth a line. It must stay on the 2.1.x line the managed
+      half resolves from either way — a 3.x native against a 2.1.x core is a pairing nobody ships.
     -->
-    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.10" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.11" />
     <PackageReference Include="PortAudioSharp" Version="0.3.0" />
   </ItemGroup>
 

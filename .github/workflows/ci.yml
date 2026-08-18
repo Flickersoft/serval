@@ -48,10 +48,11 @@ jobs:
 
       - uses: actions/setup-dotnet@v6
         with:
-          # There is no global.json, so nothing in the tree names an SDK and this line is the only
-          # place CI's version is decided. Held to the 10.0 band because every project targets
-          # net10.0 and Serval.slnx is an .slnx, which needs 9.0.200 or later to load at all. The
-          # patch floats so servicing fixes arrive without a commit.
+          # The root global.json carries a "test" section and no "sdk" one, so nothing in the tree
+          # names an SDK and this line is the only place CI's version is decided. Held to the 10.0
+          # band because every project targets net10.0 and Serval.slnx is an .slnx, which needs
+          # 9.0.200 or later to load at all. The patch floats so servicing fixes arrive without a
+          # commit.
           dotnet-version: "10.0.x"
 
       # Most of the restore is native payload that changes only when a version does: LLamaSharp's
@@ -90,6 +91,11 @@ jobs:
       # configuration — adding -c Release to one alone makes this one fail looking for assemblies
       # that were never written. Two steps rather than one because the checks list should say which
       # of "it does not compile" and "it does not work" happened.
+      #
+      # The runner is Microsoft.Testing.Platform, named by the "test" section of the root
+      # global.json — xunit.v3 4 hosts itself and ships no VSTest adapter, and `dotnet test` still
+      # defaults to VSTest on the 10.0 SDK, so without that section this step fails before it runs a
+      # single test. The section is the whole opt-in; a dotnet.config is silently ignored here.
       #
       # ffmpeg is deliberately not installed on this runner. The video-path suites check for it and
       # Assert.Skip when it is absent, which is the fresh-clone behaviour Docs/testing.md promises —

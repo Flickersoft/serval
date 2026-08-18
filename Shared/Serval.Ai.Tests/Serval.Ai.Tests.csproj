@@ -5,6 +5,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
+    <!-- An xUnit.net v3 suite is its own test host: the runner is linked into the assembly and the
+         entry point is generated, so the project builds to an executable rather than to a library
+         a separate runner loads. Required by xunit.v3, which fails the build without it. -->
+    <OutputType>Exe</OutputType>
   </PropertyGroup>
 
   <!--
@@ -21,9 +25,7 @@
   -->
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
-    <PackageReference Include="xunit.v3" Version="3.2.2" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <PackageReference Include="xunit.v3" Version="4.0.0" />
   </ItemGroup>
 
   <!--

@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.11" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
     <!--
       Held on 2.x. The XML comment source generator in Microsoft.AspNetCore.OpenApi emits
@@ -19,9 +19,9 @@
       against it.
     -->
     <PackageReference Include="Microsoft.OpenApi" Version="2.12.0" />
-    <PackageReference Include="MongoDB.Driver" Version="3.10.0" />
+    <PackageReference Include="MongoDB.Driver" Version="3.11.0" />
     <!-- The browsable UI. .NET 10 generates the OpenAPI document but ships no renderer for it. -->
-    <PackageReference Include="Scalar.AspNetCore" Version="2.16.17" />
+    <PackageReference Include="Scalar.AspNetCore" Version="2.16.20" />
   </ItemGroup>
 
   <!--

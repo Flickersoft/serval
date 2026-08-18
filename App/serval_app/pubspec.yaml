@@ -69,7 +69,7 @@ dependencies:
   # alike, so restoring takes one path where saving needs one per platform. Its constraints pin a
   # few transitive Windows-only packages to older versions — the reason `pub outdated` has
   # opinions — but none of those paths are taken on web or Linux.
-  file_picker: ^12.0.0-beta.7
+  file_picker: ^12.0.0
 
 dev_dependencies:
   flutter_test:
