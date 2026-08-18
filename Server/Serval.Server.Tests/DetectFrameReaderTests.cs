@@ -173,6 +173,16 @@ public class DetectFrameReaderTests
                 WriteFrame(dir, 0);
                 (await subscription.ReadAsync(token)).Return();
 
+                // The reader hands the frame over before it unlinks the file, so holding one says
+                // nothing about whether the sweep has got there yet. Waiting for it is the
+                // assertion; the token WithReaderAsync bounds is what makes a delete that never
+                // comes a failure with the leftovers named rather than a hang.
+                while (Directory.EnumerateFiles(dir, "frame-*.yuv").Any()
+                       && !token.IsCancellationRequested)
+                {
+                    await Task.Delay(20, CancellationToken.None);
+                }
+
                 Assert.Empty(Directory.EnumerateFiles(dir, "frame-*.yuv"));
             });
         }
