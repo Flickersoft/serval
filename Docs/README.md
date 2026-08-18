@@ -21,6 +21,7 @@ have that hardware. Everything else below is the engineering detail behind the s
 | [deployment.md](deployment.md) | Docker, the quickstart compose, the deployment examples, GPU offload, and logs |
 | [rk3588.md](rk3588.md) | Orange Pi 5 deployment and NPU vision |
 | [coral.md](coral.md) | Server deployment with Coral Edge TPUs: object detection on an accelerator, bring-up, and the failure modes |
+| [releasing.md](releasing.md) | The seven steps from a merged pull request to a published release, and the two rules that keep it from going wrong |
 | [testing.md](testing.md) | The test suites, running without a camera, and the module's diagnostics |
 | [browser-testing.md](browser-testing.md) | Driving the real web build in a browser: Playwright against canvaskit, and what an insecure origin withholds |
 | [app-notes.md](app-notes.md) | Flutter client decisions, and which design elements have no endpoint behind them |

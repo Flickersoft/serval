@@ -75,6 +75,9 @@ patch, minor or major:
 git tag v0.4.2 && git push origin v0.4.2
 ```
 
+[releasing.md](releasing.md) is the maintainer's side of that line: the seven steps from a merged pull
+request to a published release, and the two rules that keep it from going wrong.
+
 A push to `main` is not a release. It publishes `edge` and its `sha-` tag, consumes no version
 number, and stamps the last released version into the assembly — the revision is what tells two
 `edge` builds apart. A build made outside the workflow reports `0.0.0-dev`, because it has no tags
