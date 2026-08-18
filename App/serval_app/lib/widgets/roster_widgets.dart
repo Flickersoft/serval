@@ -155,11 +155,17 @@ class EmptyRoster extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.body,
+    this.action,
   });
 
   final PhosphorIconData icon;
   final String title;
   final String body;
+
+  /// The one thing to do about being empty, or null where the roster is read from a screen that
+  /// cannot add to it. Optional because most rosters carry their add button in the list column
+  /// beside them, and only reach this widget to explain the blank space.
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) => Center(
@@ -190,6 +196,7 @@ class EmptyRoster extends StatelessWidget {
               color: Nocturne.mix(Nocturne.text, 50),
             ),
           ),
+          if (action != null) ...[const SizedBox(height: 18), action!],
         ],
       ),
     ),

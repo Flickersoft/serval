@@ -22,6 +22,13 @@ import 'timeline_range_panel.dart';
 /// for the marks. This widget's whole job on the way back out is turning an x
 /// into an instant; deciding what is playable at that instant, and opening it,
 /// belongs to the screen's replay controller.
+/// How many cameras a scrubber's timeline spans.
+///
+/// Only the copy depends on it. A timeline with nothing recorded under it has to say so, and the
+/// sentence that does it names its subject — "this camera" is right under one camera and wrong
+/// under the wall, where the same bar stands for every camera at once.
+enum TimelineScope { camera, wall }
+
 class TimelineScrubber extends StatefulWidget {
   const TimelineScrubber({
     super.key,
@@ -37,7 +44,14 @@ class TimelineScrubber extends StatefulWidget {
     this.transport,
     this.dense = false,
     this.records = true,
+    this.scope = TimelineScope.camera,
   });
+
+  /// What this timeline covers, which is what the "nothing is kept" line has to name.
+  ///
+  /// Defaulted to [TimelineScope.camera] because that is what most of the App puts a scrubber
+  /// under; the wall is the one caller spanning more than one camera.
+  final TimelineScope scope;
 
   /// Whether anything on this timeline is being recorded at all.
   ///
@@ -177,6 +191,7 @@ class _TimelineScrubberState extends State<TimelineScrubber> {
         transport: widget.transport,
         dense: widget.dense,
         records: widget.records,
+        scope: widget.scope,
       ),
       SizedBox(height: widget.dense ? 6 : 8),
       LayoutBuilder(
@@ -258,6 +273,7 @@ class _Header extends StatelessWidget {
     this.transport,
     this.dense = false,
     this.records = true,
+    this.scope = TimelineScope.camera,
   });
 
   final bool live;
@@ -272,6 +288,9 @@ class _Header extends StatelessWidget {
 
   /// See [TimelineScrubber.records].
   final bool records;
+
+  /// See [TimelineScrubber.scope].
+  final TimelineScope scope;
 
   @override
   Widget build(BuildContext context) {
@@ -346,7 +365,12 @@ class _Header extends StatelessWidget {
               // has to say why it is empty — left as a caption about dragging, an empty track
               // reads as a quiet day rather than as a camera that keeps nothing.
               !records
-                  ? 'Nothing is kept for this camera — there is no footage to replay'
+                  ? switch (scope) {
+                      TimelineScope.camera =>
+                        'Nothing is kept for this camera — there is no footage to replay',
+                      TimelineScope.wall =>
+                        'Nothing is being recorded — there is no footage to replay',
+                    }
                   : range.live
                   ? 'Drag back to replay today'
                   : 'Drag to replay '

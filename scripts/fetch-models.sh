@@ -10,11 +10,57 @@
 #
 # Partial installs: SKIP_VISION=1 (the 2.3 GB Qwen3-VL), SKIP_SPEAKER=1, SKIP_SOUND=1,
 # SKIP_DETECTION=1 each skip one capability's files.
+#
+# MODEL_UID/MODEL_GID name who owns the weights afterwards. They are read only when this runs as
+# root, and only a deployment with no clone needs them — see the block below the mkdir.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODEL_DIR="${MODEL_DIR:-./models}"
 mkdir -p "$MODEL_DIR"
+
+# In the compose one-shot this runs as root — the server image has no unprivileged user, for the
+# reasons at the end of Server/Serval.Server/Dockerfile — and $MODEL_DIR is a bind mount of a
+# directory belonging to whoever ran compose. Left alone, every weight lands root-owned on their
+# host, and they can neither delete a model nor re-fetch one without sudo.
+#
+# So the tree is handed back on the way out, to the ownership of $MODEL_DIR itself. The directory
+# is the right thing to copy from: a clone creates deploy/models (it carries a tracked .gitkeep)
+# and so already holds the ownership the weights should have. It is also what stays correct under
+# `sudo docker compose`, where the invoking uid is 0 and says nothing about who the files are for,
+# and under rootless Podman, where the host uid appears as 0 inside and maps back on the way out.
+# MODEL_UID/MODEL_GID override it for the one case with nothing to copy from: no clone at all,
+# where Docker created the bind-mount source and created it as root.
+#
+# On an EXIT trap rather than at the end, because a run that dies part-way through 3.5 GB of
+# downloads still leaves files behind, and those have to be as deletable as a finished run's —
+# under `set -e` dying part-way is the ordinary failure, and bash runs an EXIT trap on Ctrl-C too.
+# Over the whole tree rather than over what this run wrote, because every step here skips a file
+# that is already present: after an interrupted run there is no set of "files this run created"
+# worth tracking, and the cheap unconditional pass covers the earlier run's leftovers as well as
+# whatever export-detector left in detect/.
+#
+# Root only, because this same script runs natively as an ordinary user, who owns what they create
+# and is refused the chown anyway — and under `set -e` that refusal would abort the run. Numeric
+# ids because the host's user names need not exist in this image. `stat -L` and the trailing slash
+# on the chown so a $MODEL_DIR that is a symlink reports and relabels the directory it points at
+# rather than the link. A stat that cannot answer falls back to 0:0, which leaves ownership where
+# it is. `chown -R` is one syscall per inode and the whole tree is under 60 of them — the 3.5 GB
+# is a handful of very large files, not a deep directory.
+if [ "$(id -u)" = 0 ]; then
+  DIR_OWNER="$(stat -Lc '%u:%g' "$MODEL_DIR" 2>/dev/null || echo '0:0')"
+  MODEL_OWNER="${MODEL_UID:-${DIR_OWNER%%:*}}:${MODEL_GID:-${DIR_OWNER##*:}}"
+
+  hand_back_models() {
+    if ! chown -R "$MODEL_OWNER" "$MODEL_DIR/"; then
+      echo "WARNING: $MODEL_DIR could not be given to $MODEL_OWNER. The weights are complete and" >&2
+      echo "the server reads them read-only, but only root can delete them from this host. Usual" >&2
+      echo "causes: a filesystem that does not record ownership (SMB, exFAT, Docker Desktop), or a" >&2
+      echo "user namespace with no mapping for that id." >&2
+    fi
+  }
+  trap hand_back_models EXIT
+fi
 
 # The general multilingual SenseVoice (zh/en/ja/ko/yue) with emotion + audio events.
 #
@@ -27,7 +73,12 @@ SENSEVOICE_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-mode
 if [ ! -f "$MODEL_DIR/$SENSEVOICE/model.int8.onnx" ]; then
   echo "Downloading SenseVoice (ASR + emotion + audio events)..."
   curl -fL --retry 3 "$SENSEVOICE_URL" -o "/tmp/${SENSEVOICE}.tar.bz2"
-  tar -xjf "/tmp/${SENSEVOICE}.tar.bz2" -C "$MODEL_DIR"
+  # --no-same-owner because these archives carry their packager's uid (1001:127), which tar as
+  # root reproduces faithfully, giving the files to nobody who exists on this host. Extracting as
+  # the extracting user instead leaves ownership with exactly one source, the chown above. It is
+  # also what keeps extraction working under rootless Podman, where a uid outside the subuid map
+  # cannot be set at all and tar fails rather than merely surprising anyone.
+  tar --no-same-owner -xjf "/tmp/${SENSEVOICE}.tar.bz2" -C "$MODEL_DIR"
   rm -f "/tmp/${SENSEVOICE}.tar.bz2"
   echo "SenseVoice ready."
 else
@@ -106,7 +157,7 @@ else
   if [ ! -f "$SPK_DIR/$SEG_MODEL/model.onnx" ]; then
     echo "Downloading pyannote segmentation model ..."
     curl -fL --retry 3 "$SEG_URL/$SEG_MODEL.tar.bz2" -o "/tmp/$SEG_MODEL.tar.bz2"
-    tar -xjf "/tmp/$SEG_MODEL.tar.bz2" -C "$SPK_DIR"
+    tar --no-same-owner -xjf "/tmp/$SEG_MODEL.tar.bz2" -C "$SPK_DIR"
     rm -f "/tmp/$SEG_MODEL.tar.bz2"
   else
     echo "Segmentation model already present."
@@ -137,7 +188,7 @@ if [ "${SKIP_SOUND:-0}" = "1" ]; then
 elif [ ! -f "$MODEL_DIR/$TAGGING/model.int8.onnx" ]; then
   echo "Downloading audio tagging model (AudioSet, 527 classes)..."
   curl -fL --retry 3 "$TAGGING_URL" -o "/tmp/${TAGGING}.tar.bz2"
-  tar -xjf "/tmp/${TAGGING}.tar.bz2" -C "$MODEL_DIR"
+  tar --no-same-owner -xjf "/tmp/${TAGGING}.tar.bz2" -C "$MODEL_DIR"
   rm -f "/tmp/${TAGGING}.tar.bz2"
   echo "Audio tagging model ready."
 else

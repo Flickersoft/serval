@@ -112,6 +112,10 @@ docker compose --profile setup run --rm fetch-models
 docker compose --profile setup run --rm export-detector
 ```
 
+Both write into `./models` as whoever owns that directory, so the weights stay yours to delete
+and re-fetch. Running them without a clone is the exception: Docker creates `./models` itself and
+owns it as root, so set `MODEL_UID`/`MODEL_GID` in `.env` to your `id -u`/`id -g` first.
+
 Then uncomment the clearly-marked AI block in `docker-compose.yml`, raise the memory limit as
 its comment says, and `docker compose up -d --force-recreate server`. Detection boxes, scene
 descriptions and transcripts appear in the activity feed as they happen. The full story — what
