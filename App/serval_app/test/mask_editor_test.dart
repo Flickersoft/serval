@@ -8,6 +8,7 @@ import 'package:serval_app/data/sample_repository.dart';
 import 'package:serval_app/screens/mask_editor_screen.dart';
 import 'package:serval_app/theme/app_theme.dart';
 import 'package:serval_app/widgets/mask_canvas.dart';
+import 'package:serval_app/widgets/nocturne_field.dart';
 
 /// Design 9b — drawing a mask, and the rules that make a polygon finishable.
 ///
@@ -146,6 +147,59 @@ void main() {
 
     await click(tester, 0.2, 0.2);
     expect(find.text('Unnamed area'), findsNothing);
+  });
+
+  /// The canvas rules are hung over the whole screen, and the name box is on that screen — so a
+  /// keystroke that means "the last point" out on the frame has to mean "the last character" once
+  /// the caret is in a field, or a mask cannot be renamed without retyping the name from scratch.
+  group('with the caret in the name box', () {
+    Finder nameField() => find.descendant(
+      of: find.byWidgetPredicate(
+        (widget) => widget is NocturneField && widget.label == 'Name',
+      ),
+      matching: find.byType(EditableText),
+    );
+
+    testWidgets('Backspace deletes a character, not a point', (tester) async {
+      await tester.pumpWidget(harness());
+      await tester.pumpAndSettle();
+
+      await click(tester, 0.2, 0.2);
+      await click(tester, 0.6, 0.2);
+      await click(tester, 0.6, 0.6);
+      await click(tester, 0.2, 0.2);
+
+      await tester.enterText(nameField(), 'drivw');
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<EditableText>(nameField()).controller.text, 'driv');
+    });
+
+    testWidgets('Esc does not abandon the shape being drawn', (tester) async {
+      await tester.pumpWidget(harness());
+      await tester.pumpAndSettle();
+
+      // A mask to select, so the inspector has a name box in it, and then a second shape in hand.
+      await click(tester, 0.2, 0.2);
+      await click(tester, 0.6, 0.2);
+      await click(tester, 0.6, 0.6);
+      await click(tester, 0.2, 0.2);
+
+      await click(tester, 0.3, 0.7);
+      await click(tester, 0.5, 0.7);
+      expect(find.text('Undo point'), findsOneWidget);
+
+      await tester.tap(nameField());
+      await tester.pumpAndSettle();
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Undo point'), findsOneWidget);
+    });
   });
 
   testWidgets('a drawn mask can be saved', (tester) async {

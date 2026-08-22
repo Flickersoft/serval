@@ -61,6 +61,10 @@
     dist build ends with (the .map is not vendored, so it only 404s).
   -->
   <script src="hls.js"></script>
+
+  <!-- Google Cast. Loads the sender SDK itself and publishes window.servalCast; see cast.js for
+       why this is JavaScript rather than Dart interop. -->
+  <script src="cast.js"></script>
 </head>
 <body>
   <!--

@@ -58,6 +58,39 @@ services:
       Serval__WebRtc__Enabled: "true"
       Serval__WebRtc__Go2RtcUrl: http://go2rtc:1984
 
+      # --- Cameras in Google Home (optional, off by default) -------------------------------
+      # The only feature here that needs this server reachable INBOUND from the internet, over
+      # HTTPS with a real certificate, and it also needs a Nest Hub on the same LAN as go2rtc.
+      # Google will not send a camera to a television by voice, whoever the vendor is; the app's
+      # own Cast button is what does that. Read Docs/google-home.md before turning it on.
+      #
+      # Wired rather than commented out, unlike the optional blocks below: every one of these
+      # defaults to empty, empty keeps the integration closed, and setting them in .env is then
+      # the whole of turning it on. The client id and secret are values you generate, not values
+      # Google gives you.
+      Serval__GoogleHome__Enabled: ${SERVAL_GOOGLE_ENABLED:-false}
+      Serval__GoogleHome__PublicBaseUrl: ${SERVAL_GOOGLE_PUBLIC_BASE_URL:-}
+      Serval__GoogleHome__ProjectId: ${SERVAL_GOOGLE_PROJECT_ID:-}
+      Serval__GoogleHome__ClientId: ${SERVAL_GOOGLE_CLIENT_ID:-}
+      Serval__GoogleHome__ClientSecret: ${SERVAL_GOOGLE_CLIENT_SECRET:-}
+      # Optional, and the one file Google does give you. Without it the integration works and
+      # Google simply does not hear about a camera you added or renamed until you re-link.
+      # Uncomment the ./secrets mount below to use it.
+      Serval__GoogleHome__HomeGraphKeyPath: ${SERVAL_GOOGLE_HOMEGRAPH_KEY:-}
+      # Optional. Empty leaves the Home app's per-camera switch out of the device list entirely,
+      # which is the safe default — with a PIN set, switching a camera off asks for it.
+      Serval__GoogleHome__VerificationPin: ${SERVAL_GOOGLE_VERIFICATION_PIN:-}
+      # Optional, and what puts cameras on a television at all — the Cast button in the app.
+      # Names the Cast application you registered against this server's own receiver page. Live
+      # then plays over WebRTC straight from go2rtc; a recording is transcoded as it plays.
+      # Empty is a working deployment with no Cast button. See Docs/google-home.md.
+      Serval__GoogleHome__CastReceiverAppId: ${SERVAL_GOOGLE_CAST_RECEIVER_APP_ID:-}
+      # The tallest a cast *recording* is transcoded to. 1080p because that is what the path can
+      # actually deliver: a 2160p segment is 9.4 MB and takes 1.25s to encode, which needs 27 Mbit/s
+      # sustained through your public address to keep up, and does not. Live casting is unaffected —
+      # it is WebRTC and never transcoded.
+      Serval__GoogleHome__CastMaxHeight: ${SERVAL_GOOGLE_CAST_MAX_HEIGHT:-1080}
+
       # --- Hardware video encode (optional) ------------------------------------------------
       # Nothing is re-encoded unless a camera's record stream asks for it, so this sits idle on
       # a stack that only records. To use the GPU (VAAPI, Intel or AMD) when a stream does ask,
@@ -90,6 +123,9 @@ services:
       # Model weights, mounted read-only from ./models (empty until you enable the AI — an empty
       # directory costs nothing, the server just notes the models are absent and keeps recording).
       - ./models:/app/models:ro
+      # The Google Home HomeGraph service-account key, if you have one. Read-only: nothing here
+      # should ever write a credential back. See Docs/google-home.md.
+      # - ./secrets:/app/secrets:ro
     # Raw frames on their way to object detection: written by ffmpeg, read and deleted
     # immediately. Memory rather than disk on purpose — a busy host pushes tens of MB a second
     # through here and none of it is worth writing to the device holding the recordings.

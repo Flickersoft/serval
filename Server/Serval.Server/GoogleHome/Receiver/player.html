@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Serval</title>
+<!--
+  Without this the layout viewport is not the screen.
+
+  Measured on a 4K television: window.innerWidth reports 3613 while every element sized at 100%
+  computes to 1280 — so the page lays itself out at 1280x720 and paints, unscaled, into the corner
+  of a much larger surface. It is not the video element and it is not CAF; it is the whole document,
+  and the log text sitting in the same corner was saying so all along.
+
+  Google's own receiver sample carries no viewport tag because an ordinary Cast device renders at
+  1280x720, where the default layout viewport happens to match the screen. A 4K set does not.
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<!--
+  An empty icon, so a browser does not request /favicon.ico and log the 401 it gets back. That
+  console is the only view into this page on a television, and a spurious error in it is the first
+  thing somebody debugging a black screen will chase.
+-->
+<link rel="icon" href="data:,">
+<!--
+  Serval's Cast Web Receiver.
+
+  The page a Cast device runs to put a camera on a television. Almost always launched by the App's
+  own Cast button: Google refuses to send a camera to a television by voice, for any vendor, so the
+  EXECUTE path that names a receiver app id reaches a Nest display and nothing else. The button is
+  the route that exists, and this is what it launches.
+
+  It plays two quite different things. A live camera is WebRTC, negotiated by this page against the
+  same signalling route Google's own player uses - Google plays WebRTC itself only on a Nest display
+  or a Chromecast with Google TV, and this is the only way a Shield, an Android TV box or a
+  Chromecast-enabled television gets sub-second video. A recording is HLS, transcoded on demand, and
+  CAF plays it through the element below.
+
+  Three things about it are load-bearing:
+
+    * It is served BY the Serval it talks to, so it is same-origin with the API. No CORS policy, no
+      mixed content, and the ticket already in the URL is a credential this page may simply reuse.
+    * It falls back to the HLS URL it was handed. Everything that can go wrong on the live path - a
+      device with no WebRTC, a camera go2rtc cannot reach, a display that cannot route to the LAN -
+      ends with the picture the operator would have had anyway rather than a black screen.
+    * It recovers from a decode failure rather than stopping on one, which is what CAF does by
+      itself. See recover(): a batch that will not play costs a blink instead of the session.
+
+  Plain HTML and JavaScript, and no build step: the Cast console is given one URL, and a page that
+  is one file is one thing to register, cache and reason about. Placeholders written as $NAME$ are
+  substituted by CameraStreamReceiver when it serves this.
+-->
+<style>
+  /* No html/body rules, matching Google's own receiver sample. Sizing the page turned out to be
+     how the player lost its layout, so nothing here constrains it. */
+  body {
+    color: #e8e8ea;
+    font-family: Roboto, Arial, sans-serif;
+  }
+  /* Both players, sized by this page rather than by CAF — see the note in the body. Stacked with
+     WebRTC on top, so whichever produces a picture first is the one on screen and the loser is
+     never seen. */
+  #media, #video {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+  }
+  #media { z-index: 0; }
+  #video { z-index: 1; }
+  .hidden { display: none !important; }
+  #label {
+    position: absolute;
+    left: 48px;
+    bottom: 40px;
+    z-index: 2;
+    font-size: 28px;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, .8);
+    transition: opacity .4s;
+  }
+</style>
+</head>
+<body>
+<!--
+  No <cast-media-player>. On a television that renders this page at 3766x2119 it computes to 0x0
+  while its shadow DOM lays itself out at a fixed 1280x720 — so the picture paints at 720p in the
+  top-left corner of a 4K screen. Measured on the device; Google's own sample relies on the page
+  being rendered at 1280x720, which this one is not.
+
+  Both players are therefore ordinary video elements this page owns and sizes. That is the
+  arrangement WebRTC already uses here, and it fills the screen correctly on the same television.
+-->
+<video id="media" autoplay playsinline></video>
+<video id="video" autoplay playsinline muted class="hidden"></video>
+<div id="label"></div>
+
+<script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // Injected when this page is served. ICE_SERVERS is Serval:GoogleHome:IceServers, which is empty
+  // for the deployment this is built for - a Cast device and go2rtc on one LAN reach each other on
+  // host candidates. It is here so an operator who runs TURN is not silently ignored, since the
+  // cameraStreamIceServers field Google carries is read by Google's player, not by this one.
+  var ICE_SERVERS = $ICE_SERVERS$;
+
+  // How long to wait for a frame before giving up on WebRTC. The exchange itself is one request;
+  // what this really bounds is ICE, which fails by going quiet rather than by erroring.
+  var WEBRTC_TIMEOUT_MS = 8000;
+
+  var video = document.getElementById('video');
+  var player = document.getElementById('media');
+  var label = document.getElementById('label');
+
+  // The camera's name answers "which one is this" while a stream starts, and stops being worth
+  // covering video with the moment there is video. Hung off both players rather than off the WebRTC
+  // one alone — that was the bug: a recording plays through the other element, so the name never
+  // faded and simply sat on the television.
+  [player, video].forEach(function (el) {
+    el.addEventListener('loadeddata', function () {
+      label.style.opacity = '0';
+    }, { once: true });
+  });
+
+  /**
+   * The largest H.264 this device says it will decode.
+   *
+   * <p>Asked rather than assumed. A Cast device's ceiling is not knowable from the outside — the
+   * floor everything supports is 1080p, but a Google TV or a 4K set will take considerably more,
+   * and transcoding a 4K camera down to 1080p for a screen that would have shown it is throwing
+   * away the picture for nothing. The answer travels back to the server on the playlist URL, so it
+   * decides what is encoded rather than merely what is displayed.</p>
+   *
+   * <p>Descending, so the first yes is the best. The codec strings are H.264 High at the level each
+   * resolution needs: a device that reports 2160 against a level it cannot actually decode would be
+   * wrong in a way no fallback recovers from, so the level is stated rather than left open.</p>
+   */
+  function bestHeight() {
+    var ladder = [
+      { w: 3840, h: 2160, codec: 'avc1.640033' },
+      { w: 2560, h: 1440, codec: 'avc1.640032' },
+      { w: 1920, h: 1080, codec: 'avc1.64002a' },
+      { w: 1280, h: 720, codec: 'avc1.64001f' }
+    ];
+
+    var context = cast.framework.CastReceiverContext.getInstance();
+    var screenHeight = Math.round(
+      (window.innerHeight || 0) * (window.devicePixelRatio || 1));
+
+    log('screen is ' + screenHeight + ' pixels tall');
+
+    for (var i = 0; i < ladder.length; i++) {
+      var rung = ladder[i];
+
+      // Decodable is not the same as worth sending. Measured on the television this was built
+      // for: canDisplayType says yes to 2160p on a panel that is 1920x1080, because the device
+      // can decode 4K and scale it down. Doing that costs four times the pixels on a shared GPU
+      // at this end, four times the bitrate over the air, and the heaviest decode the device has
+      // — to draw a picture the screen throws three quarters of away.
+      if (screenHeight > 0 && rung.h > screenHeight * 1.1) {
+        continue;
+      }
+
+      try {
+        if (context.canDisplayType('video/mp4', rung.codec, rung.w, rung.h, 30)) {
+          return rung.h;
+        }
+      } catch (err) {
+        // An older runtime without canDisplayType. Stop asking and take the floor below.
+        log('canDisplayType unavailable: ' + err);
+        return null;
+      }
+    }
+
+    return null;
+  }
+
+  var pc = null;
+  var ticket = null;
+  var settled = false;
+
+  // Null until a Cast session is joined, and null forever when this page is opened directly. Its
+  // absence is what tells useHls there is no fallback player to hand the stream to.
+  var playerManager = null;
+
+  /**
+   * Says what happened, to the device's own console.
+   *
+   * <p>Read it by attaching a debugger to the receiver, which an unpublished Cast application
+   * allows. Sending it to the server instead would need a route a television could reach, and a
+   * television holds no Serval session — so that route would be one anybody could write to, which
+   * is more than a diagnostic is worth.</p>
+   */
+  function log(message) {
+    console.log('[serval] ' + message);
+  }
+
+  // Anything this page throws lands on the television rather than in a console nobody can open.
+  // Without this an exception anywhere below is indistinguishable from a camera that will not
+  // start, because both are a black rectangle.
+  window.addEventListener('error', function (event) {
+    log('ERROR: ' + (event.message || event.error) + ' @' + (event.lineno || '?'));
+  });
+  window.addEventListener('unhandledrejection', function (event) {
+    log('UNHANDLED: ' + (event.reason && event.reason.message ? event.reason.message : event.reason));
+  });
+
+  /**
+   * The camera and its ticket, out of the access URL Google hands back verbatim.
+   *
+   * That URL is /api/google/camerastream/hls/{cameraId}/index.m3u8?t={ticket} - a real playlist,
+   * which is what makes declaring the hls protocol honest rather than a trick. It is parsed rather
+   * than passed separately because the load request has exactly one field to carry it in.
+   */
+  function parseContent(contentId) {
+    try {
+      var url = new URL(contentId, self.location.href);
+      var match = url.pathname.match(/\/camerastream\/hls\/([^/]+)\/index\.m3u8$/);
+      if (!match) return null;
+      return {
+        cameraId: decodeURIComponent(match[1]),
+        ticket: url.searchParams.get('t'),
+        origin: url.origin
+      };
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /**
+   * The local description with every candidate already in it.
+   *
+   * Google forbids trickle ICE and go2rtc's exchange is one request and one response with nowhere
+   * to renegotiate to, so the offer has to be complete before it is sent. Same discipline as the
+   * App's WebRtcSession.
+   */
+  function gathered(peer) {
+    return new Promise(function (resolve) {
+      if (peer.iceGatheringState === 'complete') {
+        resolve(peer.localDescription);
+        return;
+      }
+      peer.addEventListener('icegatheringstatechange', function onChange() {
+        if (peer.iceGatheringState !== 'complete') return;
+        peer.removeEventListener('icegatheringstatechange', onChange);
+        resolve(peer.localDescription);
+      });
+    });
+  }
+
+  function stopWebRtc() {
+    if (!pc) return;
+    try { pc.close(); } catch (err) { /* already closed */ }
+    pc = null;
+  }
+
+  /**
+   * Hands the stream back to the CAF media player, which plays the playlist we were given.
+   *
+   * <p>Opened directly in a browser there is no player manager, and nothing to hand it to: the
+   * fallback is Google's own player, which only exists inside a Cast session. Saying so in the log
+   * is the useful behaviour, because the thing being tested that way is the WebRTC leg.</p>
+   */
+  function useHls(why) {
+    if (settled) return;
+    settled = true;
+    log('falling back to HLS: ' + why);
+    stopWebRtc();
+    video.classList.add('hidden');
+
+    if (!playerManager) {
+      log('no Cast session, so there is no media player to fall back to');
+      return;
+    }
+
+    // CAF's player is underneath and already loading — hiding ours is all it takes to reveal it.
+    // See the LOAD interceptor for why both are started at once.
+  }
+
+  function useWebRtc() {
+    if (settled) return;
+    settled = true;
+    log('WebRTC is playing');
+    video.classList.remove('hidden');
+
+    // Stop the loser outright. CAF's player fetches the live playlist itself and keeps polling it,
+    // so every cast would go on pulling segments through the operator's public address for as long
+    // as the television was showing WebRTC.
+    //
+    // Stopping the media session is only safe because `disableIdleTimeout` is set at start() and
+    // this page shuts itself down when the last sender goes away — otherwise the receiver would
+    // read as idle the moment its media stopped and close, taking the WebRTC picture with it.
+    if (playerManager) {
+      try {
+        playerManager.stop();
+      } catch (err) {
+        log('could not stop the HLS player: ' + err);
+      }
+    }
+  }
+
+  async function signal(origin, body) {
+    var response = await fetch(origin + '/api/google/camerastream/signal?t='
+      + encodeURIComponent(ticket), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) throw new Error('signaling returned ' + response.status);
+    return response.json();
+  }
+
+  async function startWebRtc(content) {
+    ticket = content.ticket;
+
+    pc = new RTCPeerConnection({ iceServers: ICE_SERVERS, sdpSemantics: 'unified-plan' });
+
+    // Receive-only, and both tracks: go2rtc answers the audio m-line from the Opus source on the
+    // camera's stream. Asking for video alone would work, but the operator would lose audio on a
+    // television for no reason.
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+
+    pc.addEventListener('track', function (event) {
+      if (event.streams && event.streams[0]) video.srcObject = event.streams[0];
+    });
+
+    pc.addEventListener('connectionstatechange', function () {
+      log('connection state: ' + pc.connectionState);
+      if (pc.connectionState === 'failed') useHls('the peer connection failed');
+    });
+
+    // The picture, not the connection, is what decides this: a connected peer with a codec the
+    // device cannot decode looks identical to a working one from every state machine involved.
+    video.addEventListener('loadeddata', useWebRtc, { once: true });
+
+    await pc.setLocalDescription(await pc.createOffer());
+    var offer = await gathered(pc);
+
+    var answer = await signal(content.origin, {
+      action: 'offer',
+      deviceId: content.cameraId,
+      sdp: offer.sdp
+    });
+
+    if (!answer || !answer.sdp) throw new Error('no answer SDP');
+    await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
+  }
+
+  /** Starts a camera and arms the fallback. Shared by the Cast path and the direct one below. */
+  function play(content, title) {
+    settled = false;
+    label.textContent = title || content.cameraId;
+    label.style.opacity = '1';
+
+    startWebRtc(content).catch(function (err) {
+      useHls(err && err.message ? err.message : String(err));
+    });
+
+    setTimeout(function () {
+      useHls('no video within ' + WEBRTC_TIMEOUT_MS + ' ms');
+    }, WEBRTC_TIMEOUT_MS);
+  }
+
+  /**
+   * Opened directly, with a camera and a ticket in the query rather than in a Cast load request.
+   *
+   * This is how the WebRTC half is exercised without a television — point a browser at
+   * /api/google/camerastream/receiver?src=front-door&t=<ticket> and everything below the Cast
+   * framework runs unchanged. It grants nothing extra: the ticket is the same camera-scoped,
+   * expiring credential the signaling route already demands, and without a valid one this page can
+   * no more reach a camera than any other anonymous request can.
+   */
+  function directRequest() {
+    var query = new URLSearchParams(self.location.search);
+    var cameraId = query.get('src');
+    var ticket = query.get('t');
+    if (!cameraId || !ticket) return null;
+    return { cameraId: cameraId, ticket: ticket, origin: self.location.origin };
+  }
+
+  /**
+   * Tell the server the session is over so the ticket is dropped rather than left to expire.
+   *
+   * Best-effort by construction: keepalive so it survives the page going away, and any failure is
+   * ignored because the ticket expires on its own regardless.
+   */
+  function end(origin) {
+    if (!ticket) return;
+    try {
+      fetch((origin || self.location.origin)
+        + '/api/google/camerastream/signal?t=' + encodeURIComponent(ticket), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'end' }),
+        keepalive: true
+      });
+    } catch (err) { /* the ticket expires anyway */ }
+    ticket = null;
+  }
+
+  window.addEventListener('pagehide', function () {
+    stopWebRtc();
+    end();
+  });
+
+  // What this runtime can actually do, said once and up front. Whether a Cast device's browser
+  // offers WebRTC at all is the single fact this whole design rests on, and it is not documented
+  // anywhere by Google — so it is reported rather than assumed.
+  log('Serval receiver loaded');
+  log('WebRTC: ' + (typeof RTCPeerConnection === 'undefined' ? 'NOT SUPPORTED' : 'available'));
+  log('Cast framework: ' + (typeof cast === 'undefined' || !cast.framework ? 'MISSING' : 'ready'));
+
+  // What this page thinks its own screen is, and what the player element actually measures.
+  //
+  // A picture in the corner has exactly two explanations — the element is not being sized, or it is
+  // being sized against a viewport that is not the screen — and they are indistinguishable from the
+  // sofa. Reporting both costs two lines and settles it, which guessing twice already has not.
+  /**
+   * What the screen and the player actually measure, for the log.
+   *
+   * <p>Reporting only — nothing here sizes anything. The player lays itself out, and every attempt
+   * to help it with CSS or with pixels made the picture smaller rather than larger.</p>
+   */
+  /**
+   * The screen, once, at startup.
+   *
+   * <p>Kept when the rest of the measuring was removed, because this is the one that found the bug
+   * everything else was mistaken for: a television that reports a 3766x2119 window while laying the
+   * page out at 960x540 puts the picture in a corner, and no amount of styling the elements inside
+   * it helps. The viewport meta tag is what fixes that, and this is what would show it regressing.
+   * </p>
+   */
+  function reportScreen() {
+    log('screen: window ' + window.innerWidth + 'x' + window.innerHeight
+      + ', layout ' + document.documentElement.clientWidth
+      + 'x' + document.documentElement.clientHeight
+      + ', dpr ' + (window.devicePixelRatio || 1));
+  }
+
+  setTimeout(reportScreen, 1000);
+
+  // Direct first, and exclusively: a query already naming a camera is somebody testing or
+  // debugging this page in a browser, where there is no Cast session to join and starting one
+  // would only fail.
+  var direct = directRequest();
+  if (direct) {
+    log('started from the query string, without Cast');
+    play(direct, null);
+    return;
+  }
+
+  // The Cast path. Guarded because the framework is fetched from gstatic.com: on a device that
+  // cannot reach it there is no `cast` to call into, and an exception here would leave a blank
+  // page rather than a diagnosable one.
+  if (typeof cast === 'undefined' || !cast.framework) {
+    log('the Cast receiver framework did not load');
+    return;
+  }
+
+  var context = cast.framework.CastReceiverContext.getInstance();
+  playerManager = context.getPlayerManager();
+
+  // CAF plays into this page's own element rather than into <cast-media-player>, which is not in
+  // the document at all. See the note in the body: on a television rendering at 3766x2119 that
+  // element computes to 0x0 and paints its fixed 1280x720 internals in the corner. A plain video
+  // element sized by this page's CSS is the arrangement WebRTC already uses here, and it fills the
+  // screen. The cost is CAF's built-in player UI, which this receiver never showed anyway.
+  playerManager.setMediaElement(player);
+
+  /**
+   * CAF's own account of what the playback did.
+   *
+   * <p>The server log can say which segments were fetched and that they were served; it cannot say
+   * why the player stopped asking for more, and that is the whole question. This is the only place
+   * that knows.</p>
+   *
+   * <p>Only the events that mean something went wrong. Every state transition was logged while this
+   * was being built, which is how the decode failure was found — and far too much noise to leave
+   * running: a batch downloaded is not news, a batch that would not decode is.</p>
+   *
+   * <p>Registered by looking each name up rather than referencing it, so an event this runtime does
+   * not have is skipped instead of throwing — the SDK's surface has already cost two rounds of this
+   * by being assumed rather than checked.</p>
+   */
+  ['ERROR', 'MEDIA_FINISHED', 'STALLED', 'ABORT'].forEach(function (name) {
+    var type = cast.framework.events.EventType[name];
+    if (!type) return;
+
+    playerManager.addEventListener(type, function (event) {
+      var detail = [];
+      if (event.detailedErrorCode !== undefined) detail.push('code=' + event.detailedErrorCode);
+      if (event.endedReason !== undefined) detail.push('reason=' + event.endedReason);
+      if (event.isBuffering !== undefined) detail.push('buffering=' + event.isBuffering);
+      if (event.error) {
+        try { detail.push('error=' + JSON.stringify(event.error).slice(0, 120)); } catch (e) { /* circular */ }
+      }
+
+      log('caf ' + name + (detail.length ? ' ' + detail.join(' ') : '') + ' ' + lastState);
+
+      // Both, because a failed load reports only one of them. Measured: the first failure raises
+      // ERROR, and the reload that follows it ends at MEDIA_FINISHED reason=ERROR with no ERROR of
+      // its own — so recovering on ERROR alone stopped the ladder after a single attempt and left
+      // the last frame frozen on the television.
+      if (name === 'ERROR'
+        || (name === 'MEDIA_FINISHED' && String(event.endedReason) === 'ERROR')) {
+        recover();
+      }
+    });
+  });
+
+  /**
+   * The last sample of what the media element was doing, taken while it was still doing it.
+   *
+   * <p><b>Sampled rather than read on demand.</b> Reading it inside the error handler reported
+   * `t=0.0 buffered=none ready=0 net=3` on every failure, which is not what the player was doing —
+   * it is what an element looks like after CAF has already detached its MediaSource. By the time
+   * anything is told there was an error, the evidence has been cleared up. A second-old sample from
+   * before that is the real state.</p>
+   */
+  var lastState = 'not sampled';
+
+  setInterval(function () { lastState = mediaState(); }, 1000);
+
+  /**
+   * What the media element is doing.
+   *
+   * <p>The error itself says almost nothing — a decode failure reports `code=102` and an empty
+   * error object, which is true of a corrupt segment, a segment that arrived truncated and a
+   * segment that never arrived. Where the playhead was and how much was buffered ahead of it is
+   * what separates them, and it is the one thing the server cannot see from its side.</p>
+   */
+  function mediaState() {
+    try {
+      var ranges = [];
+      for (var i = 0; i < player.buffered.length; i++) {
+        ranges.push(player.buffered.start(i).toFixed(1) + '-' + player.buffered.end(i).toFixed(1));
+      }
+
+      return 't=' + player.currentTime.toFixed(1)
+        + ' buffered=' + (ranges.length ? ranges.join(',') : 'none')
+        + ' ready=' + player.readyState
+        + ' net=' + player.networkState
+        + (player.error ? ' media=' + player.error.code : '');
+    } catch (err) {
+      return 'state unavailable: ' + err;
+    }
+  }
+
+  // One transcoded batch, in seconds — HlsPlaylist.CastBatchSegments segments of the recorder's
+  // own length. The largest single thing that can fail to decode, and therefore the largest jump
+  // recovery ever needs to make. Approximate on purpose: it is a step size, not a timestamp.
+  var HLS_BATCH_SECONDS = 20;
+
+  // The last LOAD this receiver was given, and where playback had reached when it stopped. Kept so
+  // a failure can be resumed from rather than only reported.
+  var lastLoad = null;
+  var lastTime = 0;
+  var recoveries = 0;
+  var recoveredAt = 0;
+
+  // A recovery re-enters the LOAD interceptor, which cannot otherwise tell that load apart from a
+  // sender starting a fresh one — and would reset the very counter that stops it retrying the same
+  // broken instant forever.
+  var recovering = false;
+
+  player.addEventListener('timeupdate', function () {
+    if (!player.currentTime) return;
+    lastTime = player.currentTime;
+
+    // A minute of uninterrupted playback means whatever went wrong is behind us, so the next
+    // failure gets the full ladder again rather than inheriting an exhausted one.
+    if (recoveries > 0 && player.currentTime - recoveredAt > 60) recoveries = 0;
+  });
+
+  /**
+   * Puts the picture back after a decode failure, rather than leaving a black screen.
+   *
+   * <p><b>Why this is worth having whatever the cause is.</b> A recording is cast as a chain of
+   * independently transcoded batches, and any one of them can come out unplayable — the GPU is
+   * shared with recording and detection, and a run that loses its device produces a short or empty
+   * segment with a 200 in front of it. CAF's answer to that is to stop, permanently. Nothing
+   * upstream can promise every batch survives; this can make one that did not cost a stutter
+   * instead of the session.</p>
+   *
+   * <p><b>The ladder.</b> Resume where it broke, because the common failure is transient and the
+   * same bytes fetched again decode. Then a little later, for a batch that is genuinely corrupt at
+   * that instant. Then past the end of a whole batch, which is the largest unit that can be bad.
+   * After that, stop: a fourth attempt is a receiver flailing at something structural, and the
+   * black screen is at least honest about it.</p>
+   */
+  function recover() {
+    if (!lastLoad || !playerManager) return;
+
+    var skips = [0, 2, HLS_BATCH_SECONDS];
+    if (recoveries >= skips.length) {
+      log('giving up after ' + recoveries + ' attempts at ' + lastTime.toFixed(1));
+      return;
+    }
+
+    var resumeAt = lastTime + skips[recoveries];
+    recoveries += 1;
+    recoveredAt = resumeAt;
+
+    log('recovering: attempt ' + recoveries + ' at ' + resumeAt.toFixed(1));
+
+    try {
+      // Built on a real LoadRequestData where the SDK offers one, and on a copy of the original
+      // otherwise. Checked rather than assumed: this receiver has twice been broken by calling a
+      // piece of the Cast surface that turned out not to exist on the device.
+      var Load = cast.framework.messages && cast.framework.messages.LoadRequestData;
+      var request = Object.assign(Load ? new Load() : {}, lastLoad);
+      request.currentTime = resumeAt;
+      request.autoplay = true;
+
+      recovering = true;
+      playerManager.load(request);
+    } catch (err) {
+      log('could not reload: ' + err);
+    }
+  }
+
+  // What this screen will actually take. Asked once, but not until something is about to be loaded
+  // — the answer depends on the window's size, and a television reports that wrongly for the first
+  // moment after the page opens. See the note on the viewport meta tag: the layout viewport
+  // settling late is the bug that put the picture in the corner, and asking too early here would
+  // size every transcode off the same bad number.
+  var maxHeight;
+
+  function displayHeight() {
+    if (maxHeight === undefined) {
+      maxHeight = bestHeight();
+      log('display: ' + (maxHeight ? maxHeight + 'p or less' : 'not reported, assuming 1080p'));
+    }
+
+    return maxHeight;
+  }
+
+  playerManager.setMessageInterceptor(
+    cast.framework.messages.MessageType.LOAD,
+    function (request) {
+      var contentId = request.media && request.media.contentId;
+      log('LOAD: ' + (contentId || '(no contentId)'));
+
+      var content = parseContent(contentId);
+
+      if (!content || !content.ticket) {
+        // Not a live camera — a recording, or anything else. There is nothing to negotiate against,
+        // so CAF plays it as media, which is what gives the television its transport controls.
+        log('not a live camera; playing it as media');
+
+        // The one thing only this end knows. The server built the playlist without it and would
+        // encode to the safe floor; saying so here is what raises that to whatever this screen
+        // can show. Appended rather than replacing, so a URL that never carried one is unharmed.
+        var height = displayHeight();
+        if (height && contentId && contentId.indexOf('maxh=') === -1) {
+          request.media.contentId = contentId
+            + (contentId.indexOf('?') === -1 ? '?' : '&') + 'maxh=' + height;
+          log('asking for ' + height + 'p');
+        }
+
+        // Kept so a decode failure can be replayed from where it happened. Only for recordings:
+        // the live case is a peer connection, which has no request to re-issue and no position to
+        // resume from. A sender's own LOAD replaces this, so a deliberate re-cast resets recovery
+        // along with everything else.
+        lastLoad = request;
+        lastTime = request.currentTime || 0;
+        if (!recovering) recoveries = 0;
+        recovering = false;
+
+        return request;
+      }
+
+      // The request is returned rather than awaited, so CAF starts the HLS load immediately and
+      // reports the session as playing. Making it wait on the peer connection would show a spinner
+      // for the whole attempt and, if the device is one that cannot do WebRTC at all, for nothing.
+      play(content, request.media.metadata && request.media.metadata.title);
+      return request;
+    });
+
+  // The last sender went away — the viewer pressed Stop, or closed the tab. Nothing is watching, so
+  // release the camera and close the receiver. This is what the idle timeout would normally do, and
+  // doing it explicitly is the price of having turned that timeout off below.
+  context.addEventListener(cast.framework.system.EventType.SENDER_DISCONNECTED, function () {
+    stopWebRtc();
+    end();
+    try {
+      context.stop();
+    } catch (err) {
+      log('could not shut down: ' + err);
+    }
+  });
+
+  // disableIdleTimeout, because in the case this page exists for there is no CAF media playing at
+  // all — the picture is a peer connection CAF knows nothing about, so "idle" is exactly wrong.
+  // Google's note that this is "for non-media apps" describes that situation: the HLS player is a
+  // fallback, not what the receiver is for. The lifecycle it would have managed is handled above.
+  context.start({ disableIdleTimeout: true });
+})();
+</script>
+</body>
+</html>

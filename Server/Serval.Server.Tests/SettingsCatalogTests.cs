@@ -84,6 +84,23 @@ public class SettingsCatalogTests
     [InlineData("Serval:ApiKey")]
     [InlineData("Serval:Cors:AllowedOrigins")]
     [InlineData("Serval:OpenApi:Enabled")]
+    // The whole Google Home tree, for the reason the group above is here rather than a new one:
+    // two of these are secrets, and the catalogue round-trips through a JSON API any Admin can
+    // read; PublicBaseUrl decides where an anonymous route sends credentials Google issued;
+    // ProjectId decides which redirect URIs that route will honour; and HomeGraphKeyPath is a
+    // file path, which writable is a file-read primitive. The rest follow them because a feature
+    // configured half in the UI and half in .env is worse than either.
+    [InlineData("Serval:GoogleHome:Enabled")]
+    [InlineData("Serval:GoogleHome:PublicBaseUrl")]
+    [InlineData("Serval:GoogleHome:ProjectId")]
+    [InlineData("Serval:GoogleHome:ClientId")]
+    [InlineData("Serval:GoogleHome:ClientSecret")]
+    [InlineData("Serval:GoogleHome:HomeGraphKeyPath")]
+    [InlineData("Serval:GoogleHome:AccessTokenMinutes")]
+    [InlineData("Serval:GoogleHome:SignalingTicketSeconds")]
+    [InlineData("Serval:GoogleHome:HlsTicketMinutes")]
+    [InlineData("Serval:GoogleHome:VerificationPin")]
+    [InlineData("Serval:GoogleHome:IceServers")]
     public void The_environment_only_settings_cannot_be_written(string key)
     {
         Assert.False(SettingsCatalog.IsWritable(key));

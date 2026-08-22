@@ -4,8 +4,10 @@ import 'package:http/http.dart' as http;
 
 import '../models/alert.dart';
 import '../models/camera.dart';
+import '../models/cast_target.dart';
 import '../models/clip_selection.dart';
 import '../models/config_backup.dart';
+import '../models/google_home.dart';
 import '../models/ptz.dart';
 import '../models/push.dart';
 import '../models/saved_clip.dart';
@@ -324,6 +326,32 @@ class ServalApi {
         in await _getJson('/api/push/subscriptions') as List<dynamic>)
       PushDevice.fromJson(device as Map<String, dynamic>),
   ];
+
+  // --------------------------------------------------------------- google home
+  //
+  // Three reads and one action, and deliberately no writes: every Serval:GoogleHome:* key is
+  // environment-only, so there is nothing here for a form to submit. See Docs/google-home.md.
+
+  Future<GoogleHomeStatus> googleHomeStatus() async =>
+      GoogleHomeStatus.fromJson(
+        await _getJson('/api/google/status') as Map<String, dynamic>,
+      );
+
+  Future<List<GoogleHomeLink>> googleHomeLinks() async => [
+    for (final link in await _getJson('/api/google/links') as List<dynamic>)
+      GoogleHomeLink.fromJson(link as Map<String, dynamic>),
+  ];
+
+  /// Unlinks the Google account, revoking every credential issued to it. Google keeps showing the
+  /// cameras until it next calls and is refused.
+  Future<void> unlinkGoogleHome(String agentUserId) async {
+    final response = await _client.delete(
+      config.resolve('/api/google/links/$agentUserId'),
+    );
+    if (response.statusCode != 204) {
+      throw ServalApiException(response.statusCode, _errorMessage(response));
+    }
+  }
 
   /// Registers this browser, or refreshes what the Server holds for it.
   ///
@@ -722,6 +750,35 @@ class ServalApi {
     await _getJson('/api/clips/$id/status') as Map<String, dynamic>,
   );
 
+  /// The Cast application this deployment casts with, or null where none is registered.
+  ///
+  /// Read before anything is cast, because Google's sender SDK finds no devices until it knows
+  /// which application to look for. 404 is the ordinary answer on a deployment that has not set one
+  /// up, so it is not a failure.
+  Future<String?> castReceiverAppId() async {
+    final response = await _client.get(config.resolve('/api/cast/receiver'));
+    if (response.statusCode == 404 || response.statusCode == 503) return null;
+
+    final json = _decode(response) as Map<String, dynamic>;
+    final id = json['receiverAppId']?.toString();
+    return (id == null || id.isEmpty) ? null : id;
+  }
+
+  /// Which Cast receiver to launch for a camera, and what to hand it.
+  ///
+  /// Null where this deployment cannot cast — no Cast application registered (501), or the
+  /// configuration the receiver is served behind is incomplete (503). Both are ordinary states
+  /// rather than faults, and the button is simply absent in each, so neither throws.
+  Future<CastTarget?> castTarget(String cameraId) async {
+    final response = await _client.post(
+      config.resolve('/api/cameras/$cameraId/cast'),
+    );
+
+    if (response.statusCode == 501 || response.statusCode == 503) return null;
+
+    return CastTarget.fromJson(_decode(response) as Map<String, dynamic>);
+  }
+
   Future<void> renameClip(String id, String name) async {
     final response = await _client.patch(
       config.resolve('/api/clips/$id'),
@@ -870,6 +927,25 @@ class ServalApi {
         'from': from.toUtc().toIso8601String(),
         'to': to.toUtc().toIso8601String(),
       });
+
+  /// The same window, re-encoded for a television.
+  ///
+  /// A separate route rather than a flag on [vodUrl], because the two want opposite things: this
+  /// player wants the recording untouched, and a Cast device cannot decode it at all — every camera
+  /// here records above the 1080p a Cast device will take. [streamToken] rides in the URL because a
+  /// Cast receiver cannot set a header, and the segments inherit it.
+  Uri castVodUrl(
+    String cameraId, {
+    required DateTime from,
+    required DateTime to,
+    required DateTime at,
+    required String streamToken,
+  }) => config.resolve('/api/cameras/$cameraId/cast.m3u8', {
+    'from': from.toUtc().toIso8601String(),
+    'to': to.toUtc().toIso8601String(),
+    'at': at.toUtc().toIso8601String(),
+    'stream_token': streamToken,
+  });
 
   /// How far into the playlist the instant it was asked for actually sits.
   ///

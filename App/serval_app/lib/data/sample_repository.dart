@@ -4,11 +4,13 @@ import 'package:flutter/painting.dart';
 import '../models/activity.dart';
 import '../models/alert.dart';
 import '../models/camera.dart';
+import '../models/cast_target.dart';
 import '../models/clip_selection.dart';
 import '../models/saved_clip.dart';
 import '../models/config_backup.dart';
 import '../models/conversation.dart';
 import '../media/media_saver.dart';
+import '../models/google_home.dart';
 import '../models/ptz.dart';
 import '../models/push.dart';
 import '../models/server_settings.dart';
@@ -249,6 +251,33 @@ class SampleServalRepository implements ServalRepository {
     List<CameraNotificationRule>? rules,
   }) async {}
 
+  /// **Switched off, which is the state nearly every deployment is in** — and the more useful one
+  /// to draw, because it is the state the card exists to explain. Turning it on needs a public
+  /// HTTPS endpoint and a Nest Hub on the LAN; a sample that pretended to have both would show the
+  /// one layout an operator is least likely to see.
+  ///
+  /// The sentence is the Server's own wording, copied rather than invented: the App renders
+  /// whatever reason it is handed, so the sample has to prove that path rather than a local map.
+  @override
+  Future<GoogleHomeStatus> googleHomeStatus() async => const GoogleHomeStatus(
+    effective: false,
+    blocker: 'disabled',
+    reason:
+        'Serval:GoogleHome:Enabled is false, so the Google Home routes are closed. '
+        'This is the default. See Docs/google-home.md for what it needs before turning it on.',
+    publicBaseUrl: null,
+    homeGraphKeyConfigured: false,
+    castReceiverConfigured: false,
+  );
+
+  /// Nothing linked, matching the status above — a linked account on a disabled integration would
+  /// be a state the Server cannot produce.
+  @override
+  Future<List<GoogleHomeLink>> googleHomeLinks() async => const [];
+
+  @override
+  Future<void> unlinkGoogleHome(String agentUserId) async {}
+
   /// A deployment with notifications on and a key that looks like a real one. The sample never
   /// reaches a browser's push machinery — `PushClient` is the stub under `flutter test` — so this
   /// only has to be well-formed enough for the screen to draw its enabled state.
@@ -466,6 +495,22 @@ class SampleServalRepository implements ServalRepository {
 
   @override
   Future<void> deleteClip(String id) async {}
+
+  /// No server, so no receiver to launch and nothing for one to fetch — the button stays absent in
+  /// samples, the same posture [canStreamLive] takes on the wall.
+  @override
+  Future<String?> castReceiverAppId() async => null;
+
+  @override
+  Future<Uri?> castVodUrl(
+    String cameraId, {
+    required DateTime from,
+    required DateTime to,
+    required DateTime at,
+  }) async => null;
+
+  @override
+  Future<CastTarget?> castTarget(String cameraId) async => null;
 
   /// Null, so the sample clip screens draw their placeholder rather than reaching for a Server —
   /// the same posture [canStreamLive] takes on the wall.

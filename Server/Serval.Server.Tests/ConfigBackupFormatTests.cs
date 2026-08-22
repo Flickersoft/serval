@@ -57,6 +57,39 @@ public class ConfigBackupFormatTests
     }
 
     /// <summary>
+    /// <b>The Google Home link and its credentials are not in a backup, and must not become so.</b>
+    /// They are excluded by construction — the file is a fixed record of four sections and none of
+    /// them is a token store — so this pins a property nothing else would notice being lost.
+    ///
+    /// <para>The reasoning, since the obvious instinct is that a backup should hold everything.
+    /// Re-linking in the Google Home app takes thirty seconds, so almost nothing is saved. What it
+    /// would cost is worse than that trade: these are live bearer tokens against an endpoint that
+    /// is, by this feature's nature, reachable from the public internet — and a backup restored
+    /// onto a second machine would leave two deployments both believing they own the same Google
+    /// account's cameras, with the losing one issuing signaling tickets for cameras it does not
+    /// have. Same register as <c>VapidKeyStore</c>, which opts out for its own reasons.</para>
+    /// </summary>
+    [Fact]
+    public void No_Google_Home_credential_travels_in_a_backup()
+    {
+        using JsonDocument document = JsonDocument.Parse(
+            JsonSerializer.Serialize(Sample(), ConfigBackupFile.Json));
+
+        string[] sections = [.. document.RootElement.EnumerateObject().Select(p => p.Name)];
+
+        Assert.Equal(
+            ["kind", "warning", "createdAt", "createdBy", "createdOn", "settings", "cameras", "users", "preferences"],
+            sections);
+
+        // And the environment-only keys cannot arrive through the settings overlay either, since
+        // the catalogue refuses to store them — SettingsCatalogTests pins that end of it.
+        Assert.DoesNotContain(
+            "GoogleHome",
+            JsonSerializer.Serialize(Sample(), ConfigBackupFile.Json),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// A notification rule's three inheriting fields all mean something by being absent, and a
     /// backup that flattened any of them would restore somebody a different set of rules from the
     /// one they had. Null must come back null rather than as a zero or an empty list.

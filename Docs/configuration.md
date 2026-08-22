@@ -63,8 +63,19 @@ switches that decide whether a model is loaded at all (`ServerAi`, `Ai.Vision`, 
 
 **Environment-only**, and staying that way: `Mongo.*`, `Media.Root`, `Ingest.FfmpegPath` /
 `FfprobePath` / `HwAccelDevice` / `Encoder`, `Auth.SigningKey`, `Auth.BootstrapAdmin*`, `ApiKey`,
-`Cors.AllowedOrigins` and `OpenApi.Enabled`. Each is either load-bearing for the Server's ability
-to start, or a thing that changing through a UI could lock the operator out of that UI.
+`Cors.AllowedOrigins`, `OpenApi.Enabled`, and the whole of `GoogleHome.*`. Each is either
+load-bearing for the Server's ability to start, or a thing that changing through a UI could lock the
+operator out of that UI.
+
+`GoogleHome.*` is there as a **whole tree** rather than the two secrets in it, which is worth the
+sentence. `ClientId` and `ClientSecret` are secrets and the catalogue round-trips through a JSON API
+any Admin can read. `PublicBaseUrl` is the address this Server hands Google to send credentials to,
+and `ProjectId` decides which redirect URIs an anonymous endpoint will honour — writable, either is
+a redirect knob rather than a preference. `HomeGraphKeyPath` is a file path, which writable is a
+file-read primitive. And `Enabled` follows them because everything else that feature needs — a
+reverse proxy, a certificate, a Google console project — is outside the UI too, and a feature
+configured half in the App and half in `.env` is worse than either. What the App gets instead is a
+read-only card naming whichever condition is unmet. See [google-home.md](google-home.md).
 
 If Mongo is unreachable at startup the overlay is skipped with a warning and the Server runs on its
 built-in and environment configuration alone — recording is the job, and a settings page is not a

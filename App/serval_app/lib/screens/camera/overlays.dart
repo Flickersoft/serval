@@ -197,6 +197,8 @@ class _PictureBand extends StatelessWidget {
     required this.theirAudio,
     required this.micStage,
     required this.onExpand,
+    this.castState = CastState.unavailable,
+    this.onCast,
     this.clip,
     this.onPlayClip,
   });
@@ -219,6 +221,11 @@ class _PictureBand extends StatelessWidget {
   final ValueNotifier<MicStage> micStage;
 
   final VoidCallback onExpand;
+
+  /// See [_CastOverlayButton]. Drawn in the free corner: the pills have the top left and the
+  /// full-screen control the bottom right.
+  final CastState castState;
+  final VoidCallback? onCast;
 
   /// The range being trimmed, when the screen is a trimmer. See [_VideoStage.clip].
   final ClipSelection? clip;
@@ -291,6 +298,12 @@ class _PictureBand extends StatelessWidget {
               onPressed: onExpand,
             ),
           ),
+          if (castState != CastState.unavailable)
+            Positioned(
+              right: 12,
+              top: 12,
+              child: _CastOverlayButton(state: castState, onCast: onCast),
+            ),
         ],
       ],
     ),
@@ -481,6 +494,36 @@ class _RoundOverlayButton extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// *Cast*, in the corner of the picture, on every layout that has no room for a bar.
+///
+/// The same control in the same place whether the picture is a band or the whole screen, because
+/// on a phone it is the same gesture — and the corner of the video is where a cast icon is looked
+/// for. Filled while a session is running, which is the platform's own convention for connected and
+/// the one [_ActionRow] already uses for a live toggle.
+///
+/// Absent, never disabled: [CastState.unavailable] means no receiver was found, or a browser with
+/// no Cast support at all, and on most machines nothing is wrong — there is simply no television.
+class _CastOverlayButton extends StatelessWidget {
+  const _CastOverlayButton({required this.state, required this.onCast});
+
+  final CastState state;
+  final VoidCallback? onCast;
+
+  @override
+  Widget build(BuildContext context) {
+    final casting = state == CastState.casting;
+
+    return _RoundOverlayButton(
+      icon: casting
+          ? PhosphorIconsFill.screencast
+          : PhosphorIconsRegular.screencast,
+      tooltip: casting ? 'Stop casting' : 'Cast to a television',
+      active: casting,
+      onPressed: onCast,
+    );
+  }
 }
 
 /// The four things the desktop floats over the video, as a row beneath it.

@@ -10,6 +10,9 @@ class _TopBar extends StatelessWidget {
     this.snapshotJob,
     this.clipJob,
     this.choosingClip = false,
+    this.castState = CastState.unavailable,
+    this.onCast,
+    this.castProblem,
   });
 
   final Camera camera;
@@ -19,6 +22,13 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onSaveClip;
   final _SaveJob? snapshotJob;
   final _SaveJob? clipJob;
+
+  /// Whether a Cast device is reachable, and whether one is already playing this. Absent is the
+  /// ordinary case — no Chromecast on the network, or a browser without the Cast SDK at all — and
+  /// the button is not rendered then rather than rendered dead.
+  final CastState castState;
+  final VoidCallback? onCast;
+  final String? castProblem;
 
   /// The screen is a trimmer. The bar says so, and everything that would take you off it stops
   /// working — a gear pressed mid-trim would lose a range that took a minute to set.
@@ -78,8 +88,26 @@ class _TopBar extends StatelessWidget {
         // much. Expanded also ellipsises a long failure — the Server's own sentence — rather than
         // pushing the buttons off the bar.
         Expanded(
-          child: _SaveStatus(snapshot: snapshotJob, clip: clipJob),
+          child: _SaveStatus(
+            snapshot: snapshotJob,
+            clip: clipJob,
+            castProblem: castProblem,
+          ),
         ),
+        // Only where there is something to cast to. A disabled button would raise the question
+        // of what is wrong, and on most machines nothing is — there is simply no television.
+        if (castState != CastState.unavailable && !choosingClip) ...[
+          NocturneButton(
+            label: castState == CastState.casting ? 'Stop casting' : 'Cast',
+            // The same icon the phone layouts put in the corner of the picture, and the one a cast
+            // control is recognised by. Filled while a session runs.
+            icon: castState == CastState.casting
+                ? PhosphorIconsFill.screencast
+                : PhosphorIconsRegular.screencast,
+            onPressed: onCast,
+          ),
+          const SizedBox(width: 8),
+        ],
         NocturneButton(
           label: switch (snapshotJob) {
             _SaveWorking() => 'Saving…',

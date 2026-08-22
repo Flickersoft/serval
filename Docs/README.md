@@ -6,7 +6,8 @@ them — kept here so a cross-project topic is written once rather than repeated
 **Deploying?** Read in this order: the [root README](../README.md) quickstart →
 [deployment.md](deployment.md) (including [Enabling the AI](deployment.md#enabling-the-ai)) →
 [configuration.md](configuration.md) → [coral.md](coral.md) or [rk3588.md](rk3588.md) if you
-have that hardware. Everything else below is the engineering detail behind the system.
+have that hardware → [google-home.md](google-home.md) if you want the cameras on a Nest Hub or a
+television and have a public HTTPS endpoint. Everything else below is the engineering detail behind the system.
 
 | Document | What's in it |
 |---|---|
@@ -21,6 +22,7 @@ have that hardware. Everything else below is the engineering detail behind the s
 | [deployment.md](deployment.md) | Docker, the quickstart compose, the deployment examples, GPU offload, and logs |
 | [rk3588.md](rk3588.md) | Orange Pi 5 deployment and NPU vision |
 | [coral.md](coral.md) | Server deployment with Coral Edge TPUs: object detection on an accelerator, bring-up, and the failure modes |
+| [google-home.md](google-home.md) | Putting the cameras on a Nest Hub or a television: what it needs first, what leaves your network, and what to expose |
 | [releasing.md](releasing.md) | The seven steps from a merged pull request to a published release, and the two rules that keep it from going wrong |
 | [testing.md](testing.md) | The test suites, running without a camera, and the module's diagnostics |
 | [browser-testing.md](browser-testing.md) | Driving the real web build in a browser: Playwright against canvaskit, and what an insecure origin withholds |

@@ -12,6 +12,7 @@ import 'data/sample_repository.dart';
 import 'data/serval_api.dart';
 import 'data/serval_config.dart';
 import 'data/serval_repository.dart';
+import 'platform/frame_watchdog.dart';
 import 'playback/vod_player.dart';
 import 'push/push_client.dart';
 import 'router/serval_router.dart';
@@ -121,6 +122,12 @@ class _ServalMaterialAppState extends State<_ServalMaterialApp> {
     //
     // A no-op off the web and on a browser with no push, so there is no platform branch here.
     PushClient.onNavigate(_router.go);
+
+    // The other half of a tap landing where it was sent. Routing it is only half the job: a
+    // browser that has come back from the background unable to paint holds the screen it was on
+    // however correct the route underneath it is. See [watchFrames], including why the route it
+    // recovers to has to come from the router rather than from the address bar.
+    watchFrames(() => _router.routeInformationProvider.value.uri.toString());
   }
 
   @override

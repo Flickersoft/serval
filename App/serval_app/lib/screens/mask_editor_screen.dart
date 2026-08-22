@@ -231,13 +231,13 @@ class _MaskEditorScreenState extends ConsumerState<MaskEditorScreen> {
         },
         child: Actions(
           actions: {
-            _UndoPointIntent: CallbackAction<_UndoPointIntent>(
+            _UndoPointIntent: _CanvasAction<_UndoPointIntent>(
               onInvoke: (_) {
                 _undoPoint();
                 return null;
               },
             ),
-            _AbandonDraftIntent: CallbackAction<_AbandonDraftIntent>(
+            _AbandonDraftIntent: _CanvasAction<_AbandonDraftIntent>(
               onInvoke: (_) {
                 _abandonDraft();
                 return null;
@@ -653,6 +653,30 @@ class _UndoPointIntent extends Intent {
 
 class _AbandonDraftIntent extends Intent {
   const _AbandonDraftIntent();
+}
+
+/// A canvas rule that stands down while the caret is in a field.
+///
+/// The rules hang over the whole screen because the whole screen is the drawing surface — but the
+/// inspector has a name box in it, and Backspace there is a character, not a point. `Shortcuts`
+/// asks the nearest enclosing `Actions` first and reaches the editing shortcuts the framework
+/// installs above the app *only* when the action it finds is disabled: an action that merely
+/// declines to do anything still eats the key. So being disabled is the whole of it.
+class _CanvasAction<T extends Intent> extends CallbackAction<T> {
+  _CanvasAction({required super.onInvoke});
+
+  @override
+  bool isEnabled(T intent) => !_caretIsInAField;
+}
+
+/// Whether the keyboard is currently for typing.
+///
+/// [EditableText] builds its focus node inside itself, so a focused node with one above it is a
+/// field with the caret — every box in the app is an [EditableText], including the class chips'.
+bool get _caretIsInAField {
+  final focused = FocusManager.instance.primaryFocus?.context;
+  return focused != null &&
+      focused.findAncestorWidgetOfExactType<EditableText>() != null;
 }
 
 class _BackToCamera extends StatelessWidget {
