@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
@@ -10,6 +11,7 @@ import '../data/providers.dart';
 import '../data/serval_api.dart' show ServalApiException;
 import '../data/serval_repository.dart';
 import '../models/config_backup.dart';
+import '../models/google_home.dart';
 import '../models/system_stats.dart';
 import '../models/vitals_history.dart';
 import '../theme/app_theme.dart';
@@ -17,6 +19,7 @@ import '../theme/nocturne.dart';
 import '../theme/serval_tokens.dart';
 import '../widgets/compact_app_bar.dart';
 import '../widgets/config_backup_section.dart';
+import '../widgets/google_home_section.dart';
 import '../widgets/nocturne_button.dart';
 import '../widgets/nocturne_dialog.dart';
 import '../widgets/nocturne_field.dart';
@@ -59,6 +62,75 @@ class _ServerScreenState extends ConsumerState<ServerScreen> {
   String? _status;
   String? _error;
 
+  /// Read once when the page opens rather than on the vitals sweep: none of this moves on its own
+  /// — the configuration is environment-only and a link is made from the Google Home app, not from
+  /// here — so polling it every five seconds would be two requests a minute answering the same way
+  /// forever.
+  GoogleHomeStatus? _google;
+  List<GoogleHomeLink> _googleLinks = const [];
+  String? _googleError;
+
+  /// The two cases where the section is meant to be absent rather than present and complaining:
+  /// an account that may not read the status (a Viewer, 403), and a deployment that has not
+  /// switched the integration on at all.
+  bool _googleHidden = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadGoogleHome());
+  }
+
+  Future<void> _loadGoogleHome() async {
+    try {
+      final status = await _repository.googleHomeStatus();
+      // Only worth asking who has linked once the integration is actually serving; a closed one
+      // has nothing to list and the route would answer for an empty collection.
+      final links = status.effective
+          ? await _repository.googleHomeLinks()
+          : const <GoogleHomeLink>[];
+      if (!mounted) return;
+      setState(() {
+        // A deployment that has not switched this on gets no card — see
+        // GoogleHomeStatus.switchedOff.
+        _googleHidden = status.switchedOff;
+        _google = status;
+        _googleLinks = links;
+        _googleError = null;
+      });
+    } on ServalApiException catch (error) {
+      if (!mounted) return;
+      // A Viewer gets 403, and the section simply does not appear for them — they have nothing to
+      // do about it and it is not their page. Every other status is reported.
+      setState(() {
+        _googleHidden = error.statusCode == 403;
+        _googleError = error.statusCode == 403 ? null : error.message;
+      });
+    } catch (error) {
+      // Deliberately broad, and it is the fix for a real failure rather than defensive habit: the
+      // first build of this screen caught only ServalApiException, a decoding error escaped into an
+      // unawaited future, and the section vanished from the page with nothing logged anywhere. A
+      // fault that removes a feature from the UI is the worst shape a fault can take, because it
+      // is indistinguishable from the feature not existing.
+      if (!mounted) return;
+      setState(
+        () => _googleError = 'Could not read the Google Home status: $error',
+      );
+    }
+  }
+
+  Future<void> _unlinkGoogleHome(GoogleHomeLink link) async {
+    setState(() => _googleError = null);
+    try {
+      await _repository.unlinkGoogleHome(link.agentUserId);
+    } on ServalApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _googleError = error.message);
+      return;
+    }
+    await _loadGoogleHome();
+  }
+
   @override
   Widget build(BuildContext context) {
     // Both actions are Admin-only on the Server. Hiding them from a Viewer rather than letting the
@@ -81,6 +153,11 @@ class _ServerScreenState extends ConsumerState<ServerScreen> {
           configBusy: _busy,
           configStatus: _status,
           configError: _error,
+          googleHome: _googleHidden ? null : _google,
+          googleHomeHidden: _googleHidden,
+          googleHomeLinks: _googleLinks,
+          onUnlinkGoogleHome: canBackUp ? _unlinkGoogleHome : null,
+          googleHomeError: _googleError,
         ),
       ),
     );
@@ -217,6 +294,11 @@ class ServerScreenBody extends StatelessWidget {
     this.configBusy,
     this.configStatus,
     this.configError,
+    this.googleHome,
+    this.googleHomeHidden = false,
+    this.googleHomeLinks = const [],
+    this.onUnlinkGoogleHome,
+    this.googleHomeError,
   });
 
   final SystemStats? stats;
@@ -241,6 +323,26 @@ class ServerScreenBody extends StatelessWidget {
   final String? configBusy;
   final String? configStatus;
   final String? configError;
+
+  /// Whether the Google Home integration is live, and what is stopping it. **Null drops the whole
+  /// section** — which is what the page draws before the read lands, and what a Viewer gets, since
+  /// `GET /api/google/status` is Admin-only and the 403 is swallowed rather than reported.
+  ///
+  /// Unlike the backup section above, this is *not* dropped for the sample repository: the sample
+  /// answers the way nearly every real deployment does — switched off — and that is the state the
+  /// section exists to explain.
+  final GoogleHomeStatus? googleHome;
+
+  /// True only for an account that may not read the status at all. It is what separates "this is
+  /// not your page" — draw nothing — from "the read failed", which must always draw something.
+  final bool googleHomeHidden;
+
+  final List<GoogleHomeLink> googleHomeLinks;
+
+  /// Null draws the section without its one action, which is what a Viewer sees.
+  final void Function(GoogleHomeLink link)? onUnlinkGoogleHome;
+
+  final String? googleHomeError;
 
   /// Below this the two columns will not both hold their content, so the page becomes one column.
   /// The meters' column is fixed at its design width and the volume needs a comparable share.
@@ -295,6 +397,21 @@ class ServerScreenBody extends StatelessWidget {
                       // button inside a stack of readings. Last, after everything the page
                       // reports, it reads as a footer of actions — which suits one carrying a
                       // warning.
+                      // Above the backup section, because it reports rather than acts and this
+                      // page reads reports first. It has one button, which is why it is not
+                      // further up: the actions belong together at the foot.
+                      if (!googleHomeHidden &&
+                          (googleHome != null || googleHomeError != null)) ...[
+                        const SizedBox(height: 22),
+                        const SettingsDivider(),
+                        const SizedBox(height: 22),
+                        GoogleHomeSection(
+                          status: googleHome,
+                          links: googleHomeLinks,
+                          onUnlink: onUnlinkGoogleHome,
+                          error: googleHomeError,
+                        ),
+                      ],
                       if (onBackup != null && onRestore != null) ...[
                         const SizedBox(height: 22),
                         const SettingsDivider(),

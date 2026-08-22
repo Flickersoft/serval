@@ -40,6 +40,15 @@ Turn it on with `Serval:WebRtc:Enabled=true` and point `Serval:WebRtc:Go2RtcUrl`
 503 — recording is unaffected either way. The compose file includes the go2rtc service, wired and
 enabled.
 
+**Two more clients drive this same path.** The [Google Home integration](google-home.md) is the
+browser story above with Google's cloud substituted for the browser as the signaling party — same
+go2rtc, same `ExchangeSdpAsync`, same direct LAN media, this time to a Nest Hub. So is Serval's own
+Cast receiver, which is a browser again, running on a television, signalling against the same route
+Google's own player does — launched from the App's *Cast* button, since Google will not send a
+camera to a television itself. Both are off by default, both depend on `Serval:WebRtc:Enabled` for
+exactly the reason this section gives, and both inherit the paragraph above about candidates and
+TURN — which is what decides whether a screen can connect at all.
+
 ## Coming back from the background
 
 The App reads the lifecycle in exactly two places, both `AppLifecycleListener`, and both on

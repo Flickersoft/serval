@@ -116,6 +116,13 @@ Prefs     GET /api/preferences                     the signed-in account's own s
                                                    omitted property is left alone. No id in
                                                    the route: it is always your own.
 Telemetry POST /api/cameras/{id}/telemetry         module → server (X-Api-Key)
+Google    GET  /api/google/status                  is the integration live, and if not, why (Admin)
+          GET  /api/google/links                   the linked Google account, if any (Admin)
+          DELETE /api/google/links/{agentUserId}    unlink, revoking every credential (Admin)
+          GET  /api/google/oauth/authorize         account linking starts here (public)
+          POST /api/google/oauth/token             code and refresh grants (public)
+          POST /api/google/fulfillment             SYNC · QUERY · EXECUTE · DISCONNECT (public)
+          POST /api/google/camerastream/signal     WebRTC signaling for one camera (public)
 AI serve  GET /api/cameras/{id}/utterances?from&to&limit
           GET /api/cameras/{id}/scenes?from&to&limit
           GET /api/cameras/{id}/detections?from&to&limit
@@ -127,6 +134,11 @@ AI serve  GET /api/cameras/{id}/utterances?from&to&limit
 
 **Dashboard frames** are binary — `[uint32 cameraId length][cameraId UTF-8][JPEG]` — to skip the
 ~33% base64 tax of images-in-JSON. **Live events** are JSON text — `{ camera_id, type, document }`.
+
+**The four public `/api/google/*` routes are the only ones on this server meant to be reachable
+from the internet**, and each authenticates itself rather than relying on a session — Google's
+servers have none. They all answer 503 until the integration is configured, which is the default.
+See [Docs/google-home.md](../../Docs/google-home.md).
 
 `GET /scalar/v1` serves a [Scalar](https://scalar.com) API reference over the generated OpenAPI
 document, with a "Test Request" button that calls the live server. Unlike the usual ASP.NET

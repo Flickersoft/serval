@@ -44,4 +44,15 @@
     <InternalsVisibleTo Include="Serval.Server.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      Serval's Cast Web Receiver, served verbatim to a Cast device. A file beside the binary rather
+      than an embedded resource on purpose: an operator debugging a receiver on a television can
+      read exactly what their server is handing out, and edit it in place to try something.
+    -->
+    <Content Include="GoogleHome/Receiver/player.html">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

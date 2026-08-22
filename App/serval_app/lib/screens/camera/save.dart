@@ -58,13 +58,32 @@ String _megabytes(int bytes) =>
 /// A pill and a sentence rather than a `SnackBar`: Material's is a filled surface carrying a
 /// ripple, which is the flood Nocturne forbids — and it would cover the video it is reporting on.
 class _SaveStatus extends StatelessWidget {
-  const _SaveStatus({this.snapshot, this.clip});
+  const _SaveStatus({this.snapshot, this.clip, this.castProblem});
 
   final _SaveJob? snapshot;
   final _SaveJob? clip;
 
+  /// Why the last cast attempt failed, if one did. Shares this line because it is the same
+  /// question — what happened to the thing I just pressed — and a second status line would
+  /// compete with this one for the same space.
+  final String? castProblem;
+
   @override
   Widget build(BuildContext context) {
+    // A cast failure outranks a finished save: it is the newer news, and the save's own outcome
+    // has already been read by the time somebody presses Cast.
+    if (castProblem case final problem?) {
+      return Text(
+        problem,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontFamily: Nocturne.fontBody,
+          fontSize: 12.5,
+          color: Serval.alert,
+        ),
+      );
+    }
+
     final job = clip is _SaveWorking || clip is _SaveFailed
         ? clip
         : (snapshot ?? clip);

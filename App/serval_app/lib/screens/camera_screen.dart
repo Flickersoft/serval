@@ -19,9 +19,11 @@ import '../data/time_labels.dart';
 import '../models/activity.dart';
 import '../media/media_saver.dart';
 import '../models/camera.dart';
+import '../models/cast_target.dart';
 import '../models/clip_selection.dart';
 import '../models/ptz.dart';
 import '../models/saved_clip.dart';
+import '../platform/cast_sender.dart';
 import '../platform/secure_context.dart';
 import '../models/timeline.dart';
 import '../playback/microphone_gate.dart';
@@ -88,8 +90,36 @@ class CameraScreen extends ConsumerStatefulWidget {
   ConsumerState<CameraScreen> createState() => _CameraScreenState();
 }
 
+/// What the Cast button should say, if anything.
+enum CastState {
+  /// No receiver found, or a browser with no Cast support at all. The button is not shown.
+  unavailable,
+
+  /// A receiver is reachable and idle.
+  ready,
+
+  /// A receiver is playing this camera.
+  casting,
+}
+
 class _CameraScreenState extends ConsumerState<CameraScreen> {
   late final ServalRepository _repository = ref.read(repositoryProvider);
+
+  /// Whether a Cast receiver is reachable, and whether one is playing. The button's state is
+  /// derived from the pair rather than assigned, because the two arrive on separate streams and
+  /// assigning from either one loses what the other said — which is how "Stop casting" ended up
+  /// with no way back to "Cast".
+  bool _castReceiver = false;
+  bool _castPlaying = false;
+
+  CastState get _castState => !_castReceiver
+      ? CastState.unavailable
+      : (_castPlaying ? CastState.casting : CastState.ready);
+
+  /// Why the last cast attempt failed. Cleared when another is started.
+  String? _castProblem;
+  StreamSubscription<bool>? _castAvailable;
+  StreamSubscription<bool>? _castSession;
 
   // An hour, not the design's twelve: the thing you have come to find is nearly always in the
   // last few minutes, and at 12 h that is a few pixels of track. Widened in [initState] when
@@ -228,7 +258,176 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     // condition the Server guards the route with and it is known synchronously — waiting for the
     // probe would cost a rebuild to learn something a fixed camera already answers.
     if (widget.camera.ptzConfigured) unawaited(_readZoomPosition());
+
+    // Loads Google's sender SDK and starts discovery. A no-op off the web, on a browser with no
+    // Cast support, and on a deployment with no receiver registered — in each of which the two
+    // streams never produce and the button never appears.
+    //
+    // The application id has to be fetched first: the SDK discovers only devices that can run a
+    // named application, so passing it at launch time instead would mean no discovery, no
+    // receiver found, and no button to launch from.
+    unawaited(_startCastDiscovery());
+
+    _castAvailable = CastSender.available.listen((available) {
+      if (!mounted) return;
+      setState(() => _castReceiver = available);
+    });
+
+    _castSession = CastSender.casting.listen((casting) {
+      if (!mounted) return;
+      setState(() => _castPlaying = casting);
+    });
   }
+
+  /// Asks the Server which receiver to look for, and starts discovery if there is one.
+  ///
+  /// Silent on failure of every kind. No receiver registered, no Server, an older Server without
+  /// the route — all mean the same thing to the screen, which is that there is nothing to cast to,
+  /// and none of them is worth a message on a live view.
+  Future<void> _startCastDiscovery() async {
+    try {
+      final appId = await _repository.castReceiverAppId();
+      if (appId != null) await CastSender.initialise(appId);
+    } on Object {
+      // Nothing to cast to. See above.
+    }
+  }
+
+  /// Sends this camera to a Cast device, or stops one already playing.
+  ///
+  /// The receiver launched is Serval's own, so what plays is the same WebRTC stream on screen here
+  /// rather than a delayed recording — see [CastSender]. The server decides both which receiver to
+  /// launch and what to hand it, because the application id belongs to the deployment and the URL
+  /// carries a credential only the server can mint.
+  Future<void> _onCast() async {
+    if (_castState == CastState.casting) {
+      setState(() {
+        _castProblem = null;
+        _castWindow = null;
+      });
+      await CastSender.stop();
+      return;
+    }
+
+    // Whatever is on screen here is what goes to the television. Scrubbed back into the recording,
+    // that is the recording from where you are; otherwise it is the live camera. Casting live from
+    // a screen showing an hour ago would be the surprising reading of one button.
+    await _startCast(_replay.replaying ? _replay.playhead.value : null);
+  }
+
+  /// The window a recording is being cast over, or null when the television has the live camera.
+  ///
+  /// Held so that scrubbing here can be mirrored there: a target inside this window is a seek in
+  /// what is already playing, and one outside it needs a fresh cast. See [_mirrorCastSeek].
+  CastWindow? _castWindow;
+
+  /// Starts casting, opening at [at] for a recording or null for the live camera.
+  ///
+  /// **A recording is cast over the whole visible timeline, not from the playhead.** The window is
+  /// the scrubber's own range, and [at] only says where inside it to start playing. That is what
+  /// makes a click on the bar a seek in media the television already has rather than a fresh cast:
+  /// anywhere the bar can be clicked is, by construction, inside the window. Re-casting is what
+  /// takes seconds and what leaves a screen black while it happens, so the fewer the better.
+  Future<void> _startCast(DateTime? at) async {
+    setState(() => _castProblem = null);
+
+    final target = await _repository.castTarget(widget.camera.id);
+    if (!mounted) return;
+
+    if (target == null || !target.usable) {
+      _showCastProblem(
+        'This server has no Cast receiver set up — see Docs/google-home.md.',
+      );
+      return;
+    }
+
+    final timeline = _repository.timelineFor(widget.camera.id, _range);
+    final window = at == null ? null : CastWindow.around(at, timeline);
+    final from = window?.from;
+    final to = window?.to ?? timeline.to;
+
+    final url = from == null
+        ? target.contentUrl
+        : await _repository.castVodUrl(
+            widget.camera.id,
+            from: from,
+            to: to,
+            at: at!,
+          );
+    if (!mounted) return;
+
+    if (url == null) {
+      _showCastProblem('This recording cannot be cast.');
+      return;
+    }
+
+    setState(() => _castWindow = window);
+
+    final failure = await CastSender.cast(
+      target.receiverAppId,
+      url,
+      title: widget.camera.name,
+      live: from == null,
+
+      // Where the playhead is, not where the window starts. The two are the same thing only when
+      // casting from the very left of the scrubber, and every other time the difference is how far
+      // back the television would otherwise open.
+      startAt: window == null || at == null
+          ? Duration.zero
+          : window.offsetOf(at),
+    );
+    if (!mounted || failure == null) return;
+
+    _showCastProblem(failure);
+  }
+
+  /// Every deliberate move of the playhead, in one place.
+  ///
+  /// The screen seeks and the television follows — a scrub here that left a cast showing somewhere
+  /// else would be the obvious bug. Continuous scrubbing does not come through here: only the
+  /// committed seek does, so the television is told once rather than on every frame of a drag.
+  Future<void> _seekTo(DateTime at, TimelineWindow timeline) async {
+    await _replay.seekTo(at, timeline);
+    await _mirrorCastSeek(at);
+  }
+
+  /// Back to the live camera, here and on the television.
+  Future<void> _backToLive() async {
+    await _replay.backToLive();
+    await _mirrorCastSeek(null);
+  }
+
+  /// Takes the television to wherever this screen just went.
+  ///
+  /// **Two outcomes, and the difference is what is already on the television.** The cast playlist
+  /// covers one window — where it was started from, up to then — so a target inside it is a seek in
+  /// media the receiver already has, which lands immediately. A target *outside* it is not in that
+  /// playlist at all: scrubbing back before the cast began, or forward past the moment it started,
+  /// asks for footage never sent. That needs a fresh cast over a new window, which costs the second
+  /// or two of a reload, and is the only thing that can work.
+  ///
+  /// Live is the same problem in the other direction: a television showing the live camera has no
+  /// timeline to seek in, so scrubbing here restarts it as a recording.
+  Future<void> _mirrorCastSeek(DateTime? at) async {
+    if (_castState != CastState.casting) return;
+
+    // Back to live, and the television is already there.
+    if (at == null) {
+      if (_castWindow != null) await _startCast(null);
+      return;
+    }
+
+    final window = _castWindow;
+    if (window != null && window.covers(at)) {
+      await CastSender.seek(window.offsetOf(at));
+      return;
+    }
+
+    await _startCast(at);
+  }
+
+  void _showCastProblem(String message) =>
+      setState(() => _castProblem = message);
 
   /// Replaces the reckoned position with the camera's own, where it has one.
   ///
@@ -285,7 +484,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
       // Exactly [at]. Whoever asked for this screen decided what instant it should open on — a
       // feed row backs its own off by a few seconds because a detection is stamped part-way into
       // what caused it, and a tile handed over from the wall means the frame it was showing.
-      if (mounted) unawaited(_replay.seekTo(at, timeline));
+      if (mounted) unawaited(_seekTo(at, timeline));
     });
   }
 
@@ -301,7 +500,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
   void _openRow(DateTime? at, TimelineWindow timeline) {
     if (_tray.detent == SheetDetent.raised) _tray.goTo(SheetDetent.resting);
 
-    unawaited(at == null ? _replay.backToLive() : _replay.seekTo(at, timeline));
+    unawaited(at == null ? _backToLive() : _seekTo(at, timeline));
   }
 
   @override
@@ -317,6 +516,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     _clearSaved?.cancel();
     // The save itself is the Server's and carries on regardless — this only stops asking about it.
     _clipPoll?.cancel();
+    _castAvailable?.cancel();
+    _castSession?.cancel();
     _replay.dispose();
     _liveVideoSize.dispose();
     _pictureZoom.dispose();
@@ -895,6 +1096,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                 choosingClip: _clipMode != null,
                 onSnapshot: _onSnapshot,
                 onSaveClip: () => _onSaveClip(timeline),
+                castState: _castState,
+                onCast: _onCast,
+                castProblem: _castProblem,
               ),
               Expanded(
                 child: Row(
@@ -978,9 +1182,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                                     setState(() => _range = r),
                                 live: !replaying,
                                 playhead: _replay.playhead,
-                                onSeek: (at) => _replay.seekTo(at, timeline),
+                                onSeek: (at) => _seekTo(at, timeline),
                                 onScrub: (at) => _replay.scrubTo(at, timeline),
-                                onBackToLive: _replay.backToLive,
+                                onBackToLive: _backToLive,
                                 // The same control the wall has, from the same constants: a rate
                                 // that meant something different depending on which screen you
                                 // were on would be worse than not offering one.
@@ -1114,6 +1318,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
       theirAudio: _theirAudio,
       micStage: _micStage,
       onExpand: () => setState(() => _expanded = true),
+      castState: _castState,
+      onCast: _onCast,
       clip: _clipMode?.selection,
       onPlayClip: _clipMode == null
           ? null
@@ -1358,9 +1564,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                 onRangeChanged: (r) => setState(() => _range = r),
                 live: !replaying,
                 playhead: _replay.playhead,
-                onSeek: (at) => _replay.seekTo(at, window),
+                onSeek: (at) => _seekTo(at, window),
                 onScrub: (at) => _replay.scrubTo(at, window),
-                onBackToLive: _replay.backToLive,
+                onBackToLive: _backToLive,
                 transport: !replaying
                     ? null
                     : ReplayTransport(
@@ -1603,16 +1809,28 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
 
           // The top-right corner, which is where a full-screen video is left. Not the bottom-right
           // one it was entered from: down there is the control row.
-          if (collapsible)
-            Positioned(
-              right: 16,
-              top: 14,
-              child: _RoundOverlayButton(
-                icon: PhosphorIconsRegular.cornersIn,
-                tooltip: 'Leave full screen',
-                onPressed: () => setState(() => _expanded = false),
-              ),
+          //
+          // Cast sits beside it rather than replacing it, in the same corner it occupies on the
+          // band — full screen is the mode somebody is most likely to be in when they want the
+          // picture on a television, so leaving the mode to reach the button would be backwards.
+          Positioned(
+            right: 16,
+            top: 14,
+            child: Row(
+              children: [
+                if (_castState != CastState.unavailable) ...[
+                  _CastOverlayButton(state: _castState, onCast: _onCast),
+                  const SizedBox(width: 8),
+                ],
+                if (collapsible)
+                  _RoundOverlayButton(
+                    icon: PhosphorIconsRegular.cornersIn,
+                    tooltip: 'Leave full screen',
+                    onPressed: () => setState(() => _expanded = false),
+                  ),
+              ],
             ),
+          ),
 
           // Where pan, tilt and zoom belong: full size, over the video, with the whole picture
           // underneath to aim by.

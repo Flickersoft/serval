@@ -14,10 +14,12 @@ using Serval.Server.Alerts;
 using Serval.Server.Auth;
 using Serval.Server.Backup;
 using Serval.Server.Cameras;
+using Serval.Server.Cast;
 using Serval.Server.Clips;
 using Serval.Server.Configuration;
 using Serval.Server.Dashboard;
 using Serval.Server.Events;
+using Serval.Server.GoogleHome;
 using Serval.Server.Ingest;
 using Serval.Server.Live;
 using Serval.Server.Media;
@@ -150,6 +152,32 @@ if (string.IsNullOrEmpty(serverOptions.ApiKey))
         + "Output:ApiKey. Nothing else is affected — a Server with no modules needs no key.");
 }
 
+// Named once at boot, and specifically. Six conditions have to hold for the Google Home routes to
+// answer anything but 503, and an operator who has just filled in five of them needs to be told
+// which one is left — not that "Google Home is off", which is true of every failure and points at
+// none of them. Silent while the feature is simply switched off, which is the ordinary state.
+if (serverOptions.GoogleHome.Enabled)
+{
+    GoogleHomeStatus googleHome = GoogleHomeGate.Evaluate(serverOptions);
+    if (!googleHome.Effective)
+    {
+        startupWarnings.Add(
+            $"Google Home is switched on but not serving: {googleHome.Reason}");
+    }
+    else if (!googleHome.HomeGraphKeyConfigured)
+    {
+        // Not a failure. The integration works without it; what is lost is worth naming because
+        // the symptom appears days later, as a camera that Google never hears about.
+        startupWarnings.Add(
+            "Google Home is live without a HomeGraph key (Serval:GoogleHome:HomeGraphKeyPath is "
+            + "unset), so Google will not learn about camera changes on its own. Re-link in the "
+            + "Google Home app, or say \"Hey Google, sync my devices\", after adding or renaming "
+            + "a camera. Camera online/offline is also not reported, so SYNC declares "
+            + "willReportState: false and Google's Test Suite will skip these devices. Streaming "
+            + "is unaffected.");
+    }
+}
+
 IngestOptions ingest = serverOptions.Ingest;
 
 // What this host's ffmpeg can actually encode, read once. Fatal if it cannot be read at all: a
@@ -209,6 +237,7 @@ builder.Services.AddHostedService<StreamTicketSweepWorker>();
 builder.Services.AddSingleton<AudioLevelBroadcaster>();
 
 builder.Services.AddSingleton<Serval.Server.Media.ClipExporter>();
+builder.Services.AddSingleton<Serval.Server.Media.CastTranscoder>();
 
 // Saved clips. Registered unconditionally — the summary worker resolves the vision model through
 // the provider and does nothing when there is none, so a server with no AI still keeps clips.
@@ -236,15 +265,36 @@ builder.Services.AddHostedService<AlertRetentionWorker>();
 // nothing, and Serval:Push:Enabled is checked at enqueue rather than here so turning notifications
 // on and off does not need a restart.
 //
-// The HTTP client is the only one here pointed at the public internet — Google, Mozilla and Apple's
-// push services, whose addresses come from the browsers themselves, so it has no BaseAddress. What
-// crosses that boundary is ciphertext the relay cannot read; see WebPushCrypto.
+// The HTTP client is pointed at the public internet — Google, Mozilla and Apple's push services,
+// whose addresses come from the browsers themselves, so it has no BaseAddress. What crosses that
+// boundary is ciphertext the relay cannot read; see WebPushCrypto. The only other client here that
+// leaves the LAN is HomeGraphClient, registered below and used only when a Google Home integration
+// has been configured.
 builder.Services.AddSingleton<VapidKeyStore>();
 builder.Services.AddSingleton<VapidSigner>();
 builder.Services.AddHttpClient<WebPushClient>(http => http.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddSingleton<PushSubscriptionRepository>();
 builder.Services.AddSingleton<AlertNotifier>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<AlertNotifier>());
+
+// Registered unconditionally, like the notifier above and for the same reason: the gate reads
+// Serval:GoogleHome:* through IOptionsMonitor at request time, so switching the integration on and
+// off is a configuration change rather than a restart.
+builder.Services.AddSingleton<GoogleHomeGate>();
+builder.Services.AddSingleton<GoogleOAuthStore>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<CameraStreamTicketService>();
+builder.Services.AddHostedService<CameraStreamTicketSweepWorker>();
+builder.Services.AddScoped<SmartHomeFulfillment>();
+builder.Services.AddScoped<GoogleCameraSwitchStore>();
+
+// The second HTTP client in this process pointed at the public internet, after Web Push. What
+// crosses is an agent user id and nothing else — no camera name, no image, no telemetry. Absent a
+// HomeGraph key the client is registered and never used, which is the ordinary deployment.
+builder.Services.AddSingleton<HomeGraphKeyStore>();
+builder.Services.AddHttpClient<HomeGraphClient>(http => http.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddHostedService<GoogleHomeSyncWorker>();
+builder.Services.AddHostedService<GoogleHomeStateWorker>();
 
 // Where each camera's rolling detect-stream buffer is. In memory rather than in Mongo — see the
 // type — so it is a singleton shared by the ingest session that fills it and the worker that cuts
@@ -504,6 +554,9 @@ builder.Services.AddRateLimiter(options =>
 // explicitly below and is visible at the one place it takes effect.
 const string AppCorsPolicy = "app";
 
+/// The Google Home camera-stream signalling route, which a gstatic.com page calls directly.
+const string GoogleSignalingCorsPolicy = "google-signaling";
+
 builder.Services.AddCors(options => options.AddPolicy(AppCorsPolicy, policy =>
 {
     string[] origins = [.. serverOptions.Cors.AllowedOrigins];
@@ -532,6 +585,34 @@ builder.Services.AddCors(options => options.AddPolicy(AppCorsPolicy, policy =>
         "X-Serval-Clip-To",
         "X-Serval-Clip-Truncated");
 }));
+
+// A second, narrow policy for the one route a *Google-hosted page* calls in a browser.
+//
+// Google's CameraStream signalling is not the server-to-server exchange it looks like: the player
+// runs in a web view served from gstatic.com and fetches the signalling URL itself, so the browser
+// applies CORS to the answer. Google's documentation asks for that exact origin, and the exactness
+// is load-bearing — a credentialed fetch refuses a wildcard and requires the literal origin echoed
+// back with Allow-Credentials. The app policy above deliberately never allows credentials, so
+// leaving this route on it means the browser silently discards a perfectly good SDP answer: the
+// request arrives, the server answers 200, setRemoteDescription is never called, no ICE is ever
+// started, and every side of the system reports success while the picture never appears.
+//
+// Its own policy rather than a widened app policy, so that tightening Serval:Cors:AllowedOrigins —
+// which every publicly reachable deployment should do — cannot break Google Home.
+builder.Services.AddCors(options => options.AddPolicy(GoogleSignalingCorsPolicy, policy => policy
+
+    // gstatic.com is where Google serves the player that does the signaling, and it is the one
+    // origin this route exists for. It cannot be a wildcard: the fetch is credentialed, and a
+    // credentialed fetch refuses "*" — which fails as an answer the browser silently discards,
+    // with a 200 in every log on this side.
+    //
+    // The App's own configured origins are allowed alongside it so that this route is reachable
+    // from the Serval UI too, on the same terms as every other API route. Without them a browser
+    // on the operator's own origin is refused by a policy meant to constrain Google.
+    .WithOrigins([.. serverOptions.Cors.AllowedOrigins, "https://www.gstatic.com"])
+    .WithMethods("GET", "POST", "OPTIONS")
+    .WithHeaders("content-type", "authorization")
+    .AllowCredentials()));
 
 builder.Services.AddOpenApi(options =>
 {
@@ -653,12 +734,14 @@ app.MapDashboardEndpoint();
 app.MapLiveEventsEndpoint();
 app.MapAudioLevelsEndpoint();
 app.MapWebRtcEndpoints();
+app.MapCastEndpoints();
 app.MapPtzEndpoints();
 app.MapOnvifEndpoints();
 app.MapSystemEndpoints();
 app.MapSettingsEndpoints();
 app.MapPreferencesEndpoints();
 app.MapPushEndpoints();
+app.MapGoogleHomeEndpoints();
 app.MapConfigBackupEndpoints();
 
 // The App's web build, when wwwroot holds one (see Dockerfile) — every API route lives under

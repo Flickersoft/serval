@@ -193,6 +193,15 @@ presents when POSTing telemetry, and leaving it unset **closes** that route rath
 A Server with no edge modules needs no key and is unaffected; the boot log says so once, so a module
 retrying against a 401 is diagnosable from the other end of the wire.
 
+The [Google Home integration](google-home.md) adds two more of that kind —
+`Serval__GoogleHome__ClientId` and `__ClientSecret` — and they follow the same rule: unset closes
+the integration rather than opening it. **The client id is a secret here** even though OAuth
+usually treats it as public, because it is the only thing that decides whose Google account may
+link to this server. Both are values you generate; neither comes from Google. The one that does —
+the HomeGraph service-account key — is a **file**, bind-mounted read-only and named by
+`Serval__GoogleHome__HomeGraphKeyPath`, so it never passes through configuration or the API at all.
+It is a live Google credential: keep it wherever you keep the three above.
+
 Keep all three out of version control on any machine that is not your own. Compose reads a sibling
 `.env`, so this is enough:
 
@@ -248,11 +257,21 @@ HTTP is not a secure context either. Only real TLS is — which for a LAN name m
 proxy with a certificate, or something like `tailscale serve`, which terminates TLS with a valid
 `*.ts.net` certificate without any DNS or port-forwarding of your own.
 
-Push has one further consequence worth stating: it is the only feature that makes the Server reach
-the public internet on its own initiative, since a browser's push service is Google's, Mozilla's or
-Apple's. What crosses that boundary is ciphertext encrypted to the subscribing browser — the relay
-cannot read the alert text, the camera name, or the token in it. A deployment with no outbound
-internet access simply gets no notifications; nothing else is affected.
+Push has one further consequence worth stating: it is one of only two features that make the Server
+reach the public internet on its own initiative, since a browser's push service is Google's,
+Mozilla's or Apple's. What crosses that boundary is ciphertext encrypted to the subscribing browser
+— the relay cannot read the alert text, the camera name, or the token in it. A deployment with no
+outbound internet access simply gets no notifications; nothing else is affected.
+
+The other is [Google Home](google-home.md), and it is the only thing here that needs the Server to
+be reachable *inbound* from the internet. It is off by default. Turning it on makes the two
+defaults above stop being optional — set `Serval__Cors__AllowedOrigins` and
+`Serval__OpenApi__Enabled=false` — and the recommended shape publishes only the four `/api/google/*`
+routes while everything else stays on the LAN. No video reaches Google either way — it only sets
+the connection up — and on the displays it streams live to, the picture goes directly from go2rtc
+over the LAN without touching that boundary at all. The one case that does cross it is a Cast
+device Google will not stream live to, which fetches video from the published address instead; see
+[google-home.md](google-home.md#what-leaves-your-network).
 
 ## The object detector
 

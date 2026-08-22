@@ -6,6 +6,7 @@ using Serval.Server.Auth;
 using Serval.Server.Cameras;
 using Serval.Server.Clips;
 using Serval.Server.Configuration;
+using Serval.Server.GoogleHome;
 using Serval.Server.Preferences;
 using Serval.Server.Push;
 using Serval.Server.Recordings;
@@ -99,6 +100,33 @@ public sealed class MongoContext
     /// </summary>
     public IMongoCollection<VapidKeyDocument> PushKeys =>
         _database.GetCollection<VapidKeyDocument>("push_keys");
+
+    /// <summary>
+    /// Authorization codes issued to Google during account linking. Short-lived and single-use;
+    /// see <see cref="GoogleHome.GoogleAuthorizationCode"/> for why consuming one is an update
+    /// rather than a read.
+    /// </summary>
+    public IMongoCollection<GoogleAuthorizationCode> GoogleAuthorizationCodes =>
+        _database.GetCollection<GoogleAuthorizationCode>("google_auth_codes");
+
+    /// <summary>Access and refresh tokens issued to Google, stored as hashes only.</summary>
+    public IMongoCollection<GoogleToken> GoogleTokens =>
+        _database.GetCollection<GoogleToken>("google_tokens");
+
+    /// <summary>
+    /// The one Google account this deployment is linked to, keyed by the agent user id — so it
+    /// needs no index of its own, and there is at most one document.
+    /// </summary>
+    public IMongoCollection<GoogleLink> GoogleLinks =>
+        _database.GetCollection<GoogleLink>("google_links");
+
+    /// <summary>
+    /// Per-camera on/off as set from the Google Home app. Google-facing only: it decides whether a
+    /// camera is offered a stream there, and never touches ingest — see
+    /// <see cref="GoogleHome.GoogleCameraSwitch"/>. Only cameras switched off have a row.
+    /// </summary>
+    public IMongoCollection<GoogleCameraSwitch> GoogleCameraSwitches =>
+        _database.GetCollection<GoogleCameraSwitch>("google_camera_switches");
 
     /// <summary>
     /// Create indexes. Idempotent — Mongo ignores a CreateOne for an index that already
@@ -227,6 +255,36 @@ public sealed class MongoContext
         await PushSubscriptions.Indexes.CreateOneAsync(
             new CreateIndexModel<PushSubscription>(
                 Builders<PushSubscription>.IndexKeys.Ascending(s => s.UserId)),
+            cancellationToken: cancellationToken);
+
+        // Google's credentials are looked up by hash on every call — the code once at exchange,
+        // the access token on every fulfillment request.
+        await GoogleAuthorizationCodes.Indexes.CreateOneAsync(
+            new CreateIndexModel<GoogleAuthorizationCode>(
+                Builders<GoogleAuthorizationCode>.IndexKeys.Ascending(c => c.CodeHash),
+                new CreateIndexOptions { Unique = true }),
+            cancellationToken: cancellationToken);
+
+        await GoogleAuthorizationCodes.Indexes.CreateOneAsync(
+            new CreateIndexModel<GoogleAuthorizationCode>(
+                Builders<GoogleAuthorizationCode>.IndexKeys.Ascending(c => c.ExpiresAt),
+                new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
+            cancellationToken: cancellationToken);
+
+        await GoogleTokens.Indexes.CreateOneAsync(
+            new CreateIndexModel<GoogleToken>(
+                Builders<GoogleToken>.IndexKeys.Ascending(t => t.TokenHash),
+                new CreateIndexOptions { Unique = true }),
+            cancellationToken: cancellationToken);
+
+        // Expiring access tokens clean themselves up. Refresh tokens carry no ExpiresAt at all and
+        // are therefore skipped by this index rather than being given a far-future date to dodge
+        // it — Mongo ignores a document whose indexed field is not a date. See GoogleToken for why
+        // they must not expire.
+        await GoogleTokens.Indexes.CreateOneAsync(
+            new CreateIndexModel<GoogleToken>(
+                Builders<GoogleToken>.IndexKeys.Ascending(t => t.ExpiresAt),
+                new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
             cancellationToken: cancellationToken);
     }
 }

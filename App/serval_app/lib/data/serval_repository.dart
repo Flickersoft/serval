@@ -3,10 +3,12 @@ import 'package:flutter/foundation.dart';
 import '../models/activity.dart';
 import '../models/alert.dart';
 import '../models/camera.dart';
+import '../models/cast_target.dart';
 import '../models/clip_selection.dart';
 import '../models/config_backup.dart';
 import '../models/conversation.dart';
 import '../media/media_saver.dart';
+import '../models/google_home.dart';
 import '../models/ptz.dart';
 import '../models/push.dart';
 import '../models/saved_clip.dart';
@@ -419,6 +421,22 @@ abstract interface class ServalRepository {
   // only: which alerts reach this person is [notificationPreferences] above, because that belongs
   // to the account and this belongs to one of their browsers.
 
+  // ----------------------------------------------------------- google home
+  //
+  // Read-only, on purpose. Every Serval:GoogleHome:* key is environment-only — see
+  // Docs/google-home.md — so what the App offers is diagnosis, not configuration: which one
+  // condition is unmet, and whether an account is linked. Unlinking is the single exception,
+  // because it is an act rather than a setting.
+
+  /// Whether the Google Home integration is live, and the sentence naming what is stopping it.
+  Future<GoogleHomeStatus> googleHomeStatus();
+
+  /// The linked Google account. At most one, and usually none.
+  Future<List<GoogleHomeLink>> googleHomeLinks();
+
+  /// Unlinks, revoking every credential issued to Google.
+  Future<void> unlinkGoogleHome(String agentUserId);
+
   /// The deployment's VAPID public key and whether notifications are switched on at all.
   Future<PushConfig> pushConfig();
 
@@ -575,6 +593,29 @@ abstract interface class ServalRepository {
   Future<void> renameClip(String id, String name);
 
   Future<void> deleteClip(String id);
+
+  /// The Cast application this deployment casts with, or null where none is registered — which is
+  /// also what a deployment with no Server answers.
+  Future<String?> castReceiverAppId();
+
+  /// A VOD playlist a Cast device can fetch on its own, for a past window.
+  ///
+  /// Separate from [vodUrlFor] because the credential differs, not the playlist: a Cast receiver
+  /// cannot set an `Authorization` header, so the token has to ride in the URL — and the segments
+  /// inherit it, since the receiver resolves their names against this URL. Null where there is no
+  /// Server to mint one against.
+  Future<Uri?> castVodUrl(
+    String cameraId, {
+    required DateTime from,
+    required DateTime to,
+    required DateTime at,
+  });
+
+  /// Which Cast receiver to launch for a camera, and what to hand it.
+  ///
+  /// Null where this deployment cannot cast: no Cast application registered, or no Server at all.
+  /// That is the ordinary case rather than a failure — the button is absent, not broken.
+  Future<CastTarget?> castTarget(String cameraId);
 
   /// The clip's video, ready for a player or a download. Null where there is no Server.
   Future<Uri?> savedClipUrl(String id);

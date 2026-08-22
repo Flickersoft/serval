@@ -6,12 +6,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/activity.dart';
 import '../models/alert.dart';
 import '../models/camera.dart';
+import '../models/cast_target.dart';
 import '../models/clip_selection.dart';
 import '../models/config_backup.dart';
 import '../models/conversation.dart';
 import '../models/saved_clip.dart';
 import '../media/media_saver.dart';
 import '../media/media_sharer.dart';
+import '../models/google_home.dart';
 import '../models/ptz.dart';
 import '../models/push.dart';
 import '../models/server_settings.dart';
@@ -2164,6 +2166,16 @@ class LiveServalRepository implements ServalRepository {
   }
 
   @override
+  Future<GoogleHomeStatus> googleHomeStatus() => _api.googleHomeStatus();
+
+  @override
+  Future<List<GoogleHomeLink>> googleHomeLinks() => _api.googleHomeLinks();
+
+  @override
+  Future<void> unlinkGoogleHome(String agentUserId) =>
+      _api.unlinkGoogleHome(agentUserId);
+
+  @override
   Future<PushConfig> pushConfig() => _api.pushConfig();
 
   @override
@@ -2564,6 +2576,31 @@ class LiveServalRepository implements ServalRepository {
 
   @override
   Future<void> deleteClip(String id) => _api.deleteClip(id);
+
+  @override
+  Future<String?> castReceiverAppId() => _api.castReceiverAppId();
+
+  @override
+  Future<Uri?> castVodUrl(
+    String cameraId, {
+    required DateTime from,
+    required DateTime to,
+    required DateTime at,
+  }) async {
+    final token = await _auth.mintStreamToken();
+    if (token == null) return null;
+
+    return _api.castVodUrl(
+      cameraId,
+      from: from,
+      to: to,
+      at: at,
+      streamToken: token,
+    );
+  }
+
+  @override
+  Future<CastTarget?> castTarget(String cameraId) => _api.castTarget(cameraId);
 
   @override
   Future<Uri?> savedClipUrl(String id) async =>

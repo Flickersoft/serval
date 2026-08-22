@@ -23,6 +23,7 @@ public sealed class ServerOptions
     public AuthOptions Auth { get; set; } = new();
     public VitalsOptions Vitals { get; set; } = new();
     public PushOptions Push { get; set; } = new();
+    public GoogleHomeOptions GoogleHome { get; set; } = new();
 
     /// <summary>
     /// The shared detection library's settings — the same option types the CameraModule binds, so
@@ -334,6 +335,165 @@ public sealed class WebRtcOptions
 
     /// <summary>Base URL of the go2rtc sidecar's API, e.g. <c>http://go2rtc:1984</c>. The browser never uses this URL.</summary>
     public string Go2RtcUrl { get; set; } = "http://go2rtc:1984";
+}
+
+/// <summary>
+/// Cameras in Google Home: a cloud-to-cloud integration answering Google's SYNC/QUERY/EXECUTE
+/// fulfillment over public HTTPS, and handing back a WebRTC signaling URL per camera.
+///
+/// <para><b>Only signaling crosses the boundary; video does not.</b> Google's cloud POSTs an SDP
+/// offer to this server, which forwards it to go2rtc and returns the answer; the Nest Hub and
+/// go2rtc then carry SRTP directly over the LAN. The server never sees a media packet, and neither
+/// does Google. See <c>Docs/google-home.md</c>.</para>
+///
+/// <para><b>Every setting here is environment-only, and deliberately.</b> None appears in
+/// <see cref="SettingsCatalog"/>. Two of them are secrets and the catalogue round-trips through a
+/// JSON API readable by any Admin; two more decide where an anonymous endpoint sends credentials
+/// and which redirect URIs it accepts, so a UI-writable version would be a redirect knob rather
+/// than a preference; and the whole feature is inseparable from a reverse proxy, a certificate and
+/// a Google console project, none of which live in the UI either. The rule this follows is stated
+/// in <c>Docs/configuration.md</c>: an environment-only setting is one that is load-bearing for
+/// startup, or one that changing through a UI could use to take the server away from its operator.</para>
+/// </summary>
+public sealed class GoogleHomeOptions
+{
+    /// <summary>
+    /// Master switch, off by default. On its own it is not enough: the integration is effective
+    /// only when every condition in <c>GoogleHomeGate</c> holds, and the boot log names whichever
+    /// one does not.
+    /// </summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>
+    /// The public HTTPS origin Google reaches this server on, e.g.
+    /// <c>https://serval.example.com</c>. It is what the camera stream's signaling URL is built
+    /// from, and it must be configured rather than taken from the request: behind a reverse proxy
+    /// <c>Host</c> and <c>X-Forwarded-Host</c> are caller-controlled, and this server trusts no
+    /// forwarded headers. Must be absolute and <c>https</c> — Google will not post to anything else.
+    /// </summary>
+    public string PublicBaseUrl { get; set; } = "";
+
+    /// <summary>
+    /// The Google Home Developer Console project id. It fixes the only two redirect URIs
+    /// <c>/api/google/oauth/authorize</c> will honour —
+    /// <c>https://oauth-redirect.googleusercontent.com/r/{ProjectId}</c> and its
+    /// <c>-sandbox</c> twin — which is what keeps that route from being an open redirect.
+    /// </summary>
+    public string ProjectId { get; set; } = "";
+
+    /// <summary>
+    /// The OAuth client id Google presents. <b>Generate it — this is not a value Google gives
+    /// you</b> — and generate it with real entropy (<c>openssl rand -base64 32</c>), because here
+    /// it is a secret rather than the public identifier OAuth usually makes it.
+    ///
+    /// <para>It is the gate on account linking. The authorization endpoint is public by protocol
+    /// design and carries no other credential, so this is the only thing standing between a
+    /// stranger's Google account and the cameras in this house. It is the <em>second</em> factor:
+    /// a stolen one yields an authorization code that cannot be exchanged without
+    /// <see cref="ClientSecret"/>. Empty closes the integration.</para>
+    /// </summary>
+    public string ClientId { get; set; } = "";
+
+    /// <summary>
+    /// The OAuth client secret Google presents at the token endpoint, in a form body — the one
+    /// credential here that never appears in a URL. Generate it alongside
+    /// <see cref="ClientId"/>. Empty closes the integration, the same way
+    /// <see cref="ServerOptions.ApiKey"/> closes telemetry ingest: unset means no client has been
+    /// granted access, not that every caller has it.
+    /// </summary>
+    public string ClientSecret { get; set; } = "";
+
+    /// <summary>
+    /// Path to the HomeGraph service-account JSON key, bind-mounted read-only
+    /// (<c>/app/secrets/homegraph.json</c> in compose). Optional, and absent is the common case.
+    ///
+    /// <para>A path rather than the JSON itself because the file is a couple of kilobytes with an
+    /// embedded PEM in it, and a path rather than an upload because a settings-writable file path
+    /// is a file-read primitive handed to anyone who can reach the API.</para>
+    ///
+    /// <para>It buys exactly one thing: <c>requestSync</c>, so a renamed or added camera reaches
+    /// Google without re-linking. <c>CameraStream</c> has no reportable state, so there is no
+    /// <c>reportState</c> to lose. Without it the integration works and the device list goes stale
+    /// until someone re-links or says "Hey Google, sync my devices".</para>
+    /// </summary>
+    public string HomeGraphKeyPath { get; set; } = "";
+
+    /// <summary>
+    /// The PIN that must be spoken before a camera can be switched off from the Google Home app.
+    ///
+    /// <para><b>Without it the switch is not offered at all.</b> Google requires a <c>pinNeeded</c>
+    /// challenge for the <c>OnOff</c> trait on a camera, and the reason is not paperwork: without
+    /// one, anyone within earshot of an Assistant — through an open window, or a voice on a
+    /// television — can say "turn off the driveway camera" and be obeyed. So an unset PIN means the
+    /// trait is left out of SYNC and any stored switch is ignored, rather than a switch that works
+    /// unprotected.</para>
+    ///
+    /// <para>Environment-only like the rest of this tree, and a secret: it is the second factor on a
+    /// voice command, so it does not belong in a settings API any signed-in Admin can read.</para>
+    /// </summary>
+    public string VerificationPin { get; set; } = "";
+
+    /// <summary>How long an access token issued to Google stays valid. Google refreshes on expiry.</summary>
+    public int AccessTokenMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// How long a camera stream's signaling ticket stays valid. Longer than the App's 30-second
+    /// WebSocket ticket because the round trip is longer: Google's cloud, then a display waking up.
+    /// </summary>
+    public int SignalingTicketSeconds { get; set; } = 120;
+
+    /// <summary>
+    /// How long the ticket in an HLS stream URL stays valid — how long a Cast device can keep
+    /// watching one camera before Google has to ask for a fresh URL.
+    ///
+    /// <para>Sixty minutes because that is <c>Serval:Auth:AccessTokenMinutes</c>, and so the
+    /// lifetime the App's own <c>stream_token</c> already has. This credential is the same kind of
+    /// thing — it travels in a URL and can only watch video — so matching it is the honest default;
+    /// making it longer would hand Google a broader grant than a signed-in user gets.</para>
+    /// </summary>
+    public int HlsTicketMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// ICE servers offered to Google, as RTCIceServer objects. Empty is right for the deployment
+    /// this is built for — a Nest Hub and go2rtc on one LAN reach each other on host candidates,
+    /// and Google falls back to its own public STUN either way. It exists for an operator who has
+    /// a TURN server; there is none here, which is why a Hub outside the LAN cannot connect.
+    /// </summary>
+    public List<string> IceServers { get; set; } = [];
+
+    /// <summary>
+    /// The Cast application id to open camera streams with on a Cast device, in place of Google's
+    /// own receiver.
+    ///
+    /// <para><b>What setting it buys.</b> Google plays WebRTC itself only on Nest displays and
+    /// Chromecast with Google TV. Every other Cast device — an NVIDIA Shield, an Android TV box, a
+    /// Chromecast-enabled television — is offered <c>hls</c> instead and launches a Cast Web
+    /// Receiver to play it, several seconds behind. Naming a receiver here replaces that player
+    /// with the one this server hosts at <c>/api/google/camerastream/receiver</c>, which opens a
+    /// WebRTC connection and falls back to the same HLS URL when it cannot.</para>
+    ///
+    /// <para><b>Empty by default, and empty is a working deployment.</b> Unset, the field is left
+    /// out of EXECUTE, Google uses its own receiver, and HLS plays exactly as it did before this
+    /// existed. Registering a Cast application is an upgrade, not a prerequisite — the id belongs
+    /// to whoever registered it, so there is none to ship.</para>
+    /// </summary>
+    public string CastReceiverAppId { get; set; } = "";
+
+    /// <summary>
+    /// The tallest a cast recording is transcoded to, whatever the television says it can display.
+    ///
+    /// <para><b>Why a cap when the receiver already asks the device.</b> Because what a screen can
+    /// <em>display</em> is not what the path can <em>deliver</em>. Measured on a 4K set: it reports
+    /// 2160p honestly, and a 2160p segment is 9.4 MB and takes 1.25s to encode — leaving 2.75s of a
+    /// four-second segment to move 9.4 MB, which is 27 Mbit/s sustained, per cast, through the
+    /// operator's public address. It buffers ten seconds, plays them and stops. The same recording
+    /// at 1080p is 2.5 MB and 0.7s, needing about 6 Mbit/s, and plays.</para>
+    ///
+    /// <para>1080p because it is the resolution every Cast device decodes and a security camera on
+    /// a television does not want for more. Raise it where the network is known to carry it —
+    /// nothing here prevents 2160, it simply is not the default.</para>
+    /// </summary>
+    public int CastMaxHeight { get; set; } = 1080;
 }
 
 /// <summary>The generated OpenAPI document and the Scalar UI over it.</summary>

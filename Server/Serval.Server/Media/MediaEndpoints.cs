@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using Serval.Server.Cameras;
 using Serval.Server.Configuration;
+using Serval.Server.Ingest;
 using Serval.Server.Recordings;
 using Serval.Server.Snapshots;
 
@@ -206,10 +207,59 @@ public static class MediaEndpoints
     }
 
     /// <summary>
-    /// Only the two shapes ffmpeg writes — <c>init-&lt;stamp&gt;</c> and
-    /// <c>seg-&lt;stamp&gt;-&lt;n&gt;</c> — and no path separators to escape the directory.
+    /// Only the shapes ffmpeg writes — <c>init-&lt;stamp&gt;</c>, <c>seg-&lt;stamp&gt;-&lt;n&gt;</c>,
+    /// and the preview ring's <c>preview-init-&lt;stamp&gt;</c> and
+    /// <c>preview-&lt;stamp&gt;-&lt;n&gt;</c> — and no path separators to escape the directory.
+    ///
+    /// <para>The ring's prefix belongs here because the Google Home playback route serves that
+    /// playlist: without it the playlist is fetched happily and every segment in it 404s, which
+    /// reads on a television as a stream that connected and then showed nothing.</para>
     /// </summary>
-    private static bool IsSafeSegmentName(string file) =>
-        (file.StartsWith("init-", StringComparison.Ordinal) || file.StartsWith("seg-", StringComparison.Ordinal))
+    internal static bool IsSafeSegmentName(string file) =>
+        (file.StartsWith("init-", StringComparison.Ordinal)
+            || file.StartsWith("seg-", StringComparison.Ordinal)
+            || file.StartsWith(PreviewRing.FilePrefix, StringComparison.Ordinal))
         && file.All(c => char.IsAsciiLetterOrDigit(c) || c is '-');
+
+    /// <summary>
+    /// The live HLS a Cast device is given: the preview ring, not the recording.
+    ///
+    /// <para><b>Why not the recording.</b> The recording is the camera's main stream copied
+    /// untouched — 4K HEVC on one of these cameras, 7680x2160 on another, 1920x2560 on the
+    /// doorbell. A Cast receiver decodes H.264 to Level 4.2, which is 1080p; every one of those is
+    /// beyond it. The receiver fetches the playlist, fetches the segments, decodes nothing, and
+    /// sits on the title card with no error to report — which is exactly what it did.</para>
+    ///
+    /// <para>The preview ring is the <em>detect</em> stream copied instead: 640x360 H.264 with AAC,
+    /// already written, already a rolling window with its own init, and already sized for exactly
+    /// this. It costs nothing extra because it is being written whether anybody casts or not — see
+    /// <see cref="PreviewRing"/> for why it exists.</para>
+    ///
+    /// <para>Null when there is no ring. A camera whose detect stream <em>is</em> its recorded
+    /// stream writes none, because the recording already is those bytes — the caller falls back to
+    /// the recording index there, and on such a camera the recorded stream is the small one
+    /// anyway.</para>
+    /// </summary>
+    internal static string? PreviewPlaylist(string mediaRoot, string cameraId, string? streamToken)
+    {
+        string path = Path.Combine(mediaRoot, cameraId, PreviewRing.PlaylistName);
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            // ffmpeg rewrites this file in place, so a read can catch it mid-write. A torn playlist
+            // is not worth serving; the player asks again within a segment's time either way.
+            string playlist = File.ReadAllText(path);
+            return playlist.Contains("#EXTM3U", StringComparison.Ordinal)
+                ? HlsPlaylist.WithStreamToken(playlist, streamToken)
+                : null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
 }

@@ -17,6 +17,7 @@ import 'package:serval_app/data/serval_config.dart';
 import 'package:serval_app/main.dart';
 import 'package:serval_app/models/activity.dart';
 import 'package:serval_app/models/camera.dart';
+import 'package:serval_app/models/google_home.dart';
 import 'package:serval_app/models/timeline.dart';
 import 'package:serval_app/push/push_client.dart';
 import 'package:serval_app/theme/app_theme.dart';
@@ -25,6 +26,7 @@ import 'package:serval_app/widgets/activity_filter_panel.dart';
 import 'package:serval_app/widgets/activity_sheet.dart';
 import 'package:serval_app/widgets/camera_tile.dart';
 import 'package:serval_app/widgets/config_backup_section.dart';
+import 'package:serval_app/widgets/google_home_section.dart';
 import 'package:serval_app/widgets/timeline_scrubber.dart';
 
 /// Renders the screens at the design's 1440x900 with the real vendored
@@ -336,6 +338,11 @@ void main() {
     // repository, whose `canSaveMedia` is false, so both callbacks are null and `ServerScreenBody`
     // drops the section. This golden is therefore the page as the design drew it, and 2d below is
     // where the section gets its own picture.
+    //
+    // No Google Home section either, for a related reason: the sample answers `googleHomeStatus`
+    // the way nearly every real deployment does — switched off — and a deployment that never
+    // turned the integration on gets no card, because there is nothing to diagnose. 2e below
+    // carries the states where it does appear.
     await expectLater(
       find.byType(ServalApp),
       matchesGoldenFile('goldens/server.png'),
@@ -380,6 +387,79 @@ void main() {
     await expectLater(
       find.byType(ConfigBackupSection),
       matchesGoldenFile('goldens/server-backup.png'),
+    );
+  });
+
+  /// The Google Home section in the two states the page-level golden cannot reach: live with an
+  /// account linked, and live with nobody linked yet.
+  ///
+  /// The disabled state is in 2c already, on the sample repository — which is deliberately the
+  /// common one, since turning this on needs a public HTTPS endpoint most deployments do not have.
+  testWidgets('2e — google home', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: buildServalTheme(),
+        home: Scaffold(
+          backgroundColor: Serval.panel,
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: SizedBox(
+              width: 780,
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    GoogleHomeSection(
+                      status: const GoogleHomeStatus(
+                        effective: true,
+                        blocker: 'None',
+                        reason: null,
+                        publicBaseUrl: 'https://serval.example.com',
+                        homeGraphKeyConfigured: true,
+                        castReceiverConfigured: true,
+                      ),
+                      links: [
+                        GoogleHomeLink(
+                          agentUserId: '0f8fad5bd9cb469fa16570867728950e',
+                          // Fixed rather than relative to now, like the notification device dates
+                          // and for the same reason: a date derived from now is a different string
+                          // every day the goldens are captured.
+                          linkedAt: DateTime(2026, 8, 3, 9, 40),
+                          lastFulfillmentAt: DateTime(2026, 8, 8, 14, 3),
+                          lastSyncAt: DateTime(2026, 8, 8, 14, 3),
+                        ),
+                      ],
+                      onUnlink: (_) {},
+                    ),
+                    const SizedBox(height: 26),
+                    // Live, but nobody has linked yet — the middle of the setup runbook, and the
+                    // state somebody waiting for cameras to appear is actually in.
+                    const GoogleHomeSection(
+                      status: GoogleHomeStatus(
+                        effective: true,
+                        blocker: 'None',
+                        reason: null,
+                        publicBaseUrl: 'https://serval.example.com',
+                        homeGraphKeyConfigured: false,
+                        castReceiverConfigured: false,
+                      ),
+                      links: [],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await expectLater(
+      find.byType(Column).first,
+      matchesGoldenFile('goldens/server-google-home.png'),
     );
   });
 

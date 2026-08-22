@@ -20,4 +20,6 @@ Docs/security-backlog.md
 deploy/.env
 deploy/models/*
 !deploy/models/.gitkeep
+# The Google Home HomeGraph service-account key lands here. It is a live Google credential.
+deploy/secrets/
 

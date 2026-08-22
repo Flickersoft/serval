@@ -57,7 +57,9 @@ rendering a plausible number.
 ## Why Serval
 
 - **Everything local.** No accounts, no cloud inference, no phoning home. The AGPL and your
-  firewall are the whole privacy policy.
+  firewall are the whole privacy policy. Two features can reach outward, both off unless you turn
+  them on: web push notifications, and [Google Home](Docs/google-home.md) — and even there no video
+  ever reaches Google, which only ever helps set the connection up.
 - **One coherent stack.** A single container serves the API and the UI from the same origin;
   MongoDB and go2rtc ride alongside in one compose file. No plugin matrix, no separate frontend
   host, no CORS.

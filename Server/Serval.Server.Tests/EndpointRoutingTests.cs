@@ -1,10 +1,14 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Serval.Server.Alerts;
 using Serval.Server.Cameras;
+using Serval.Server.Cast;
+using Serval.Server.GoogleHome;
+using Serval.Server.Ingest;
 using Serval.Server.Media;
 using Serval.Server.Onvif;
 using Serval.Server.Preferences;
@@ -183,8 +187,206 @@ public class EndpointRoutingTests
             policies);
     }
 
+    /// <summary>
+    /// <b>The signalling route carries its own CORS policy, and must.</b>
+    ///
+    /// <para>It is called by a player page Google serves from <c>gstatic.com</c>, in a browser, so
+    /// the answer is subject to CORS. The app-wide policy cannot serve it: that policy never allows
+    /// credentials — correctly, since allowing them alongside a wildcard origin is what makes a
+    /// drive-by able to ride a bearer token — and a credentialed fetch refuses a wildcard origin
+    /// outright.</para>
+    ///
+    /// <para>The failure this pins is invisible from the server: the request arrives, the handler
+    /// answers 200 with a valid SDP, and the browser discards the response before the page can read
+    /// it. No ICE is started, nothing errors, and every log on both sides reports success while the
+    /// camera shows a spinner forever. It also means <b>tightening
+    /// <c>Serval:Cors:AllowedOrigins</c> — which every publicly reachable deployment should do —
+    /// must not be able to break Google Home</b>, which is exactly what would happen if this route
+    /// inherited the app policy.</para>
+    /// </summary>
+    [Fact]
+    public void TheGoogleSignallingRouteHasItsOwnCorsPolicy()
+    {
+        IReadOnlyList<Endpoint> endpoints = Materialize(app => app.MapGoogleHomeEndpoints());
+
+        Dictionary<string, string?> cors = endpoints
+            .OfType<RouteEndpoint>()
+            .ToDictionary(
+                e => $"{Verb(e)} /{e.RoutePattern.RawText?.TrimStart('/')}",
+                e => e.Metadata.GetMetadata<IEnableCorsAttribute>()?.PolicyName,
+                StringComparer.Ordinal);
+
+        // Every route a browser or a Cast receiver reaches directly. Signaling is fetched by
+        // Google's player from gstatic; the HLS trio is fetched by a Cast Web Receiver, and
+        // Chromecast is strict about CORS on adaptive streaming.
+        string[] browserFacing =
+        [
+            "POST /api/google/camerastream/signal",
+            "GET /api/google/camerastream/hls/{cameraId}/index.m3u8",
+            "GET /api/google/camerastream/hls/{cameraId}/{file}.m4s",
+            "GET /api/google/camerastream/hls/{cameraId}/{file}.mp4",
+        ];
+
+        foreach (string route in browserFacing)
+        {
+            Assert.Equal("google-signaling", cors[route]);
+        }
+
+        // And only those. The rest are server-to-server or Admin, and a route quietly picking this
+        // up would widen what a Google-served page may read.
+        Assert.Empty(cors.Where(pair =>
+            !browserFacing.Contains(pair.Key, StringComparer.Ordinal) && pair.Value is not null));
+    }
+
     private static string Verb(RouteEndpoint endpoint) =>
         endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods.FirstOrDefault() ?? "?";
+
+    /// <summary>
+    /// What a route's authorization actually resolves to, with <c>AllowAnonymous</c> told apart
+    /// from "no explicit policy".
+    ///
+    /// <para><b><see cref="MediaRoutesTakeAStreamToken"/>'s reading of
+    /// <see cref="IAuthorizeData.Policy"/> cannot make that distinction</b>, and for the media
+    /// group it did not need to: every route there is authorized, and the question was only which
+    /// policy. It is the wrong instrument for a group that is mostly anonymous. Both an anonymous
+    /// route and one that simply forgot to say answer "(default)" through that lens — and they
+    /// behave completely differently, because the application-wide fallback policy means the
+    /// forgetful one 401s while the anonymous one is open to the internet.</para>
+    ///
+    /// <para>So <see cref="IAllowAnonymous"/> is checked first. A Google Home route that loses its
+    /// <c>.AllowAnonymous()</c> reads "(default)" here and fails; one that gains it by accident
+    /// reads "(anonymous)" and fails the same way.</para>
+    /// </summary>
+    private static string Authorization(RouteEndpoint endpoint) =>
+        endpoint.Metadata.GetMetadata<IAllowAnonymous>() is not null
+            ? "(anonymous)"
+            : endpoint.Metadata.GetMetadata<IAuthorizeData>()?.Policy ?? "(default)";
+
+    /// <summary>
+    /// The App's own cast route: a POST, on the camera it casts, behind an ordinary session.
+    ///
+    /// <para><b>The contrast with its neighbours is the point.</b> Every other route that mints or
+    /// spends a camera stream ticket is anonymous, because its caller is Google and Google holds no
+    /// Serval session. This one's caller is the App, which does — so an <c>.AllowAnonymous()</c>
+    /// picked up here would hand a camera-scoped credential to anyone who found the URL, and the
+    /// symptom would be nothing at all.</para>
+    ///
+    /// <para>POST rather than GET because it mints that credential: a prefetch, a link, or a
+    /// crawler should not be able to.</para>
+    /// </summary>
+    [Fact]
+    public void TheAppsCastRoutesRequireASession()
+    {
+        List<RouteEndpoint> endpoints = Materialize(app => app.MapCastEndpoints())
+            .OfType<RouteEndpoint>()
+            .ToList();
+
+        Assert.Equal(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                // Read on every camera screen, so that device discovery can start. Names no camera
+                // and mints nothing, which is why it is the one that may be a GET.
+                ["/api/cast/receiver"] = "GET (default)",
+
+                // Mints a camera-scoped credential, so a prefetch, a link or a crawler must not be
+                // able to trigger it.
+                ["/api/cameras/{id}/cast"] = "POST (default)",
+
+                // Fetched by the television itself, which cannot set an Authorization header — so
+                // these two take the token in the URL, which is exactly what MediaAccess is for.
+                // On the default policy they would 401 every time and the cast would show nothing.
+                ["/api/cameras/{id}/cast.m3u8"] = "GET MediaAccess",
+                ["/api/cameras/{id}/cast/{file}.ts"] = "GET MediaAccess",
+            },
+            endpoints.ToDictionary(
+                e => e.RoutePattern.RawText!,
+                e => string.Join(",", e.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods)
+                    + " " + (e.Metadata.GetMetadata<IAuthorizeData>()?.Policy ?? "(default)"),
+                StringComparer.Ordinal));
+
+        // Neither is anonymous, and that is the whole point of asserting it. Every *other* route
+        // that touches these tickets is, because its caller is Google and Google holds no Serval
+        // session — so an .AllowAnonymous() drifting onto one of these would look consistent with
+        // its neighbours while handing a camera credential to anyone who found the URL.
+        Assert.All(endpoints, e =>
+        {
+            Assert.Null(e.Metadata.GetMetadata<IAllowAnonymous>());
+            Assert.NotNull(e.Metadata.GetMetadata<IAuthorizeData>());
+        });
+    }
+
+    /// <summary>
+    /// The Google Home group: which routes exist, and which of them are open to the internet.
+    ///
+    /// <para><b>This is the group where getting authorization wrong is worst.</b> Every other route
+    /// in the server is reached from a trusted LAN; the anonymous ones here are what an operator
+    /// publishes through a reverse proxy so Google's servers — and the Cast devices Google runs
+    /// pages on — can reach them, and none of those callers has a Serval session or can be given
+    /// one. Each is therefore anonymous by necessity and authenticates itself in the handler, the
+    /// arrangement telemetry ingest already uses, while the three administrative routes take an
+    /// ordinary Admin session.</para>
+    ///
+    /// <para>The failure this prevents is silent in both directions. An administrative route that
+    /// picked up <c>.AllowAnonymous()</c> from the group would publish the linked-account list and
+    /// the unlink action to anyone who found the URL. A fulfillment route that lost it would 401
+    /// every call from Google, and the only symptom is cameras that stop responding to voice with
+    /// nothing in the App to explain it.</para>
+    /// </summary>
+    [Fact]
+    public void GoogleHomeRoutesAreAnonymousOnlyWhereGoogleCalls()
+    {
+        IReadOnlyList<Endpoint> endpoints = Materialize(app => app.MapGoogleHomeEndpoints());
+
+        Dictionary<string, string> authorization = endpoints
+            .OfType<RouteEndpoint>()
+            .ToDictionary(
+                e => $"{Verb(e)} /{e.RoutePattern.RawText?.TrimStart('/')}",
+                Authorization,
+                StringComparer.Ordinal);
+
+        Assert.Equal(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                // The two Google calls. Anonymous by necessity — Google's servers hold no Serval
+                // session — and each authenticates itself: /authorize on a constant-time client_id
+                // compare, /token on client_id plus the client secret in the form body.
+                ["GET /api/google/oauth/authorize"] = "(anonymous)",
+                ["POST /api/google/oauth/token"] = "(anonymous)",
+
+                // The two Google calls after linking. Fulfillment carries the access token this
+                // server issued; signaling carries a ticket good for one camera for two minutes.
+                ["POST /api/google/fulfillment"] = "(anonymous)",
+                ["POST /api/google/camerastream/signal"] = "(anonymous)",
+                // Also carries its own CORS policy — see CorsPolicyTests below. Anonymous alone is
+                // not enough for this one: it is called by a page Google serves, in a browser.
+
+                // The HLS trio, fetched by a Cast Web Receiver running on a Google TV. Anonymous
+                // for a stronger reason than the others: that receiver cannot send an
+                // Authorization header at all, which is why the camera-scoped ticket travels as
+                // ?t= and why cameraStreamNeedAuthToken is false. Each handler spends the ticket
+                // and refuses one minted for a different camera.
+                ["GET /api/google/camerastream/hls/{cameraId}/index.m3u8"] = "(anonymous)",
+                ["GET /api/google/camerastream/hls/{cameraId}/{file}.m4s"] = "(anonymous)",
+                ["GET /api/google/camerastream/hls/{cameraId}/{file}.mp4"] = "(anonymous)",
+
+                // Serval's own Cast Web Receiver. Anonymous because a Cast device fetches it
+                // before any load request exists, so there is no ticket to present yet — and it
+                // needs none: it is a static page naming no camera and carrying no credential.
+                // Everything specific arrives afterwards and is checked by the routes above.
+                ["GET /api/google/camerastream/receiver"] = "(anonymous)",
+
+                // Read by the App's status card to explain why the integration is not working, so
+                // it is deliberately *not* behind the 503 gate the other routes sit behind — but it
+                // reports configuration, which is an Admin's business and nobody else's.
+                ["GET /api/google/status"] = "Admin",
+
+                // Administrative, and the pair most damaging to leak: the list names the linked
+                // account, and the delete silently removes every camera from somebody's house.
+                ["GET /api/google/links"] = "Admin",
+                ["DELETE /api/google/links/{agentUserId}"] = "Admin",
+            },
+            authorization);
+    }
 
     /// <summary>
     /// The specific shape that took the server down, pinned so it cannot come back: a complex type
@@ -240,6 +442,11 @@ public class EndpointRoutingTests
         builder.Services.AddSingleton<AlertStorage>();
         builder.Services.AddSingleton<CameraRepository>();
         builder.Services.AddSingleton<OnvifClient>();
+        builder.Services.AddSingleton<GoogleHomeGate>();
+        builder.Services.AddSingleton<GoogleOAuthStore>();
+        builder.Services.AddSingleton<CameraStreamTicketService>();
+        builder.Services.AddSingleton<SmartHomeFulfillment>();
+        builder.Services.AddSingleton<IGo2RtcClient, Go2RtcClient>();
 
         WebApplication app = builder.Build();
         map(app);
