@@ -234,8 +234,8 @@ public class EndpointRoutingTests
 
         // And only those. The rest are server-to-server or Admin, and a route quietly picking this
         // up would widen what a Google-served page may read.
-        Assert.Empty(cors.Where(pair =>
-            !browserFacing.Contains(pair.Key, StringComparer.Ordinal) && pair.Value is not null));
+        Assert.DoesNotContain(cors, pair =>
+            !browserFacing.Contains(pair.Key, StringComparer.Ordinal) && pair.Value is not null);
     }
 
     private static string Verb(RouteEndpoint endpoint) =>
