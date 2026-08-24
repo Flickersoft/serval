@@ -97,10 +97,13 @@ void onNavigate(void Function(String route) handler) {
   );
 }
 
-/// Reads the destination `sw.js` recorded, clearing it on the way past.
+/// Reads the destination `sw.js` recorded, clearing it once it has been acted on.
 ///
-/// The delete happens before the handler runs rather than after, so a navigation that throws — or a
-/// page closed halfway through one — cannot leave an entry behind for the next launch to open.
+/// The delete happens after [_accept] rather than before, and the order is load-bearing: between the
+/// two sits an `await`, and a page that reloads inside it — the frame watchdog recovering a wedged
+/// pipeline is the way that happens — would come back to a destination already erased and land on
+/// whatever screen it was on. Deleting afterwards cannot leak a second opening, because [_accept]
+/// has by then recorded the id and every later delivery of the same tap is refused on it.
 Future<void> _takePending(void Function(String route) handler) async {
   try {
     final cache = await web.window.caches.open(_pendingCache).toDart;
@@ -109,17 +112,18 @@ Future<void> _takePending(void Function(String route) handler) async {
       return;
     }
 
-    await cache.delete(_pendingKey.toJS).toDart;
-
     final body = (await recorded.text().toDart).toDart;
     if (jsonDecode(body) case {'url': final String url, 'id': final num id}) {
       final tappedAt = DateTime.fromMillisecondsSinceEpoch(id.toInt());
       if (DateTime.now().difference(tappedAt) > _pendingMaxAge) {
+        await cache.delete(_pendingKey.toJS).toDart;
         return;
       }
 
       _accept(id.toInt(), url, handler);
     }
+
+    await cache.delete(_pendingKey.toJS).toDart;
   } catch (_) {
     // A browser that refuses the Cache API leaves the message as the only route, which is where
     // this started. Nothing here is worth failing a launch over.

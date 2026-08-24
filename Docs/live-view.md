@@ -140,33 +140,57 @@ through the same path for the same reason.
 None of that section is reachable from `flutter test`: `SampleServalRepository.canStreamLive` is
 false precisely so tests never construct a peer connection. It is verified on a device.
 
-## Still not done: pausing live video when the App is hidden
+## Pausing when the App is hidden
 
-The App notices being hidden; it does not yet *stop* anything. A backgrounded tab holds its WebRTC
-connection open and keeps draining every camera's JPEG off `WS /api/dashboard` for as long as it is
-open. The wall socket is opened once in `LiveServalRepository.start()` and closed only when the
-repository is disposed, which never happens.
+The wall socket is let go ten seconds after the App goes away and picked up again on the way back.
+The WebRTC view is not, and that split is deliberate rather than unfinished — see the end of this
+section for what the other half costs.
 
-Two things would pause, and they are worth very different amounts:
+`AppLifecycleListener(onHide:)` in `main.dart` arms the ten seconds and
+`LiveServalRepository.pauseLive()` spends it, on `DashboardSocket.pause()` alone. The reopen needs
+nothing new: `resumeLive()` already calls `reconnectNow()` on both sockets, which is a teardown and a
+fresh connect whatever state the socket was left in.
 
-- **The focused WebRTC view is the real saving**, because go2rtc pulls RTSP lazily (above): closing
-  the peer connection stops the upstream pull as well as the browser's decode. `WebRtcView` now has
-  `_restart()`, which is most of the work — a pause is that without the reopen — and the resume path
-  it needs already exists.
-- **The wall socket costs bandwidth, not Server CPU.** Those JPEGs are encoded by ffmpeg
-  unconditionally at `Ingest:SnapshotFps` to feed `CameraVisionPipeline` and `/snapshot.jpg`, so
-  closing the socket saves egress and the client's decode and nothing else. Gating the encode itself
-  on whether anyone is watching means reaching back into `StreamIngestManager` and `RecordArguments`,
-  and contending with those two non-UI consumers — a separate and much larger job.
-  `DashboardSocket` would need a `pause()`/`resume()` pair; `close()` cannot be reused, as it closes
-  the broadcast controllers one-way and would kill the repository's `frames` subscription with them.
+Ten seconds because that is how long a glance at something else lasts — the same figure
+`WebRtcView` already uses to decide whether a resume was long enough to be worth rebuilding a session
+for. Dropping the socket for a five-second look and rebuilding it on the way back would churn a
+connection and repaint a wall to save five seconds of frames, and the reconnect is the expensive half
+of that trade. There is nothing visible to opt out of, so it is unconditional rather than a
+preference.
 
-**The events socket is never paused.** `WS /api/events` is the alerting path and is nearly free.
+`pause()` rather than `disconnect()`, and rather than `close()`. `close()` ends the broadcast
+controllers one-way and would take the repository's `frames` subscription with them. `disconnect()`
+is right but announces `connected: false`, which is a claim that the Server could not be reached —
+this is the App choosing to stop listening — and which would rebuild the whole wall on the way past.
 
-About ten seconds of grace before pausing keeps an alt-tab round trip from churning the socket and
-renegotiating WebRTC for a glance at something else — the same figure `WebRtcView` already uses to
-decide whether a resume was long enough to be worth rebuilding for. There is nothing visible to opt
-out of, so this wants to be unconditional rather than a preference.
+**What it saves is bandwidth and frames, not Server CPU.** Those JPEGs are encoded by ffmpeg
+unconditionally at `Ingest:SnapshotFps` to feed `CameraVisionPipeline` and `/snapshot.jpg`, so this
+saves egress and the client's own decode and nothing else. Gating the encode on whether anyone is
+watching means reaching back into `StreamIngestManager` and `RecordArguments` and contending with
+those two non-UI consumers — a separate and much larger job.
+
+The frames are the other half, and are why this is in `frame_watchdog.dart`'s orbit as much as this
+one's. Every arrival writes a notifier, which rebuilds a tile, which asks for an animation frame that
+a hidden page is never given — so an open wall socket guarantees there is a frame outstanding at the
+moment the page goes away, which is the state that file describes as unrecoverable from the inside.
+It is a reduction rather than a cure: `WS /api/events` still writes the feed, so a busy site can
+still schedule a frame while hidden.
+
+**The events socket is never paused.** `WS /api/events` is the alerting path — an alert that arrived
+while a phone was in a pocket is the most important thing this App carries — and it is nearly free, a
+message per thing that happens rather than a frame per camera per second.
+
+### Still not done: the focused WebRTC view
+
+**This is the larger saving of the two**, because go2rtc pulls RTSP lazily (above): closing the peer
+connection stops the upstream pull as well as the browser's decode, and it is the heaviest renderer
+state the App ever holds while going into the background.
+
+What it costs is a refactor rather than a call. `WebRtcView._restart()` is a pause plus a reopen, but
+a pause on its own has nowhere to leave the view: `_session` is non-nullable and `build` binds to its
+`stage` notifier, so pausing means either a session that exists but was never started or a nullable
+one threaded through `build`, `dispose`, `didUpdateWidget` and both publishers. Worth doing, and worth
+doing deliberately, on the file that owns the live picture.
 
 Independent of all of the above, and with the same trigger: `DashboardEndpoint.SendAsync` has no send
 timeout and the endpoint has no drain loop, so a client that stops reading without closing — a frozen

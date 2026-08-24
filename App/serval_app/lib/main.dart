@@ -114,20 +114,31 @@ class _ServalMaterialAppState extends State<_ServalMaterialApp> {
   void initState() {
     super.initState();
 
+    // The other half of a tap landing where it was sent. Routing it is only half the job: a
+    // browser that has come back from the background unable to paint holds the screen it was on
+    // however correct the route underneath it is. See [watchFrames], including why the route it
+    // recovers to has to come from the router rather than from the address bar.
+    //
+    // Before the push wiring below, which reaches into it: a tap can arrive at any moment after
+    // that line, and it must not find a watchdog that does not know where it would reload to.
+    watchFrames(() => _router.routeInformationProvider.value.uri.toString());
+
     // A tapped notification on a tab that is already open arrives as a message from the service
     // worker rather than as a navigation — see `sw.js`, which prefers focusing this tab to opening
     // a second copy of a live-video app. Routing it has to happen here because this is where the
     // router lives; without it the tab would come to the front unchanged, which reads as the tap
     // having done nothing at all.
     //
+    // The route is set and *then* the frame pipeline is asked about, in that order. The message
+    // arrives whether or not the App can paint, so this is the one moment the App knows somebody is
+    // waiting on a screen it may be unable to draw — and by then `go` has already told the router
+    // where the reload should land.
+    //
     // A no-op off the web and on a browser with no push, so there is no platform branch here.
-    PushClient.onNavigate(_router.go);
-
-    // The other half of a tap landing where it was sent. Routing it is only half the job: a
-    // browser that has come back from the background unable to paint holds the screen it was on
-    // however correct the route underneath it is. See [watchFrames], including why the route it
-    // recovers to has to come from the router rather than from the address bar.
-    watchFrames(() => _router.routeInformationProvider.value.uri.toString());
+    PushClient.onNavigate((route) {
+      _router.go(route);
+      probeFrames();
+    });
   }
 
   @override
@@ -186,6 +197,16 @@ class _RepositoryStarterState extends ConsumerState<_RepositoryStarter> {
   /// — constructs nothing new and observes nothing.
   AppLifecycleListener? _lifecycle;
 
+  /// The grace running between the App going away and the wall socket being let go.
+  Timer? _pause;
+
+  /// How long the App must be away before it stops listening to the wall.
+  ///
+  /// The same figure `WebRtcView` uses to decide whether a resume was long enough to be worth
+  /// rebuilding a session for, and for the same reason: it is how long a glance at something else
+  /// lasts. Both are about the difference between looking away and going away.
+  static const _pauseAfterHidden = Duration(seconds: 10);
+
   @override
   void initState() {
     super.initState();
@@ -194,23 +215,29 @@ class _RepositoryStarterState extends ConsumerState<_RepositoryStarter> {
     _onAuthChanged();
 
     if (ref.read(repositoryProvider) is LiveServalRepository) {
-      // `onShow`, and deliberately not `onResume`. Both fire on the way back, but `onResume` also
-      // fires when the window merely regains input focus — and a second monitor showing the wall
-      // while you work elsewhere is the case this must leave alone. `onShow` is the hidden→visible
-      // edge alone, which is what `document.visibilityState` means, and it buys that rule with no
-      // bookkeeping of our own.
-      _lifecycle = AppLifecycleListener(onShow: _onShown);
+      // `onShow`/`onHide`, and deliberately not `onResume`/`onPause`. All four fire on the way back
+      // and away, but the resume pair also fires when the window merely regains or loses input
+      // focus — and a second monitor showing the wall while you work elsewhere is the case this
+      // must leave alone. The show pair is the hidden→visible edge alone, which is what
+      // `document.visibilityState` means, and it buys that rule with no bookkeeping of our own.
+      _lifecycle = AppLifecycleListener(onShow: _onShown, onHide: _onHidden);
     }
   }
 
   @override
   void dispose() {
+    _pause?.cancel();
     _lifecycle?.dispose();
     _auth?.removeListener(_onAuthChanged);
     super.dispose();
   }
 
   void _onShown() {
+    // Before the `_started` gate: a pause armed while signed in must not survive a sign-out into
+    // the next session, and cancelling one that is not there costs nothing.
+    _pause?.cancel();
+    _pause = null;
+
     // Only for a session that is actually running. Coming back to a tab sitting on `/login` must
     // not raise sockets, and `_started` is the same flag both edges below turn on.
     if (!_started) return;
@@ -219,6 +246,26 @@ class _RepositoryStarterState extends ConsumerState<_RepositoryStarter> {
     if (repository is! LiveServalRepository) return;
 
     repository.resumeLive();
+  }
+
+  /// The App has gone away. Start the clock on letting the wall socket go.
+  ///
+  /// Through a timer rather than at once because most of what this edge reports is somebody glancing
+  /// at something else. Dropping the socket for a five-second look and rebuilding it on the way back
+  /// would churn a connection and repaint a wall to save five seconds of frames — and the reconnect
+  /// is the expensive half of that trade, not the frames.
+  void _onHidden() {
+    if (!_started) return;
+
+    _pause?.cancel();
+    _pause = Timer(_pauseAfterHidden, () {
+      _pause = null;
+
+      final repository = ref.read(repositoryProvider);
+      if (repository is! LiveServalRepository) return;
+
+      repository.pauseLive();
+    });
   }
 
   void _onAuthChanged() {

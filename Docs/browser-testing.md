@@ -236,6 +236,38 @@ adb shell input tap 480 828        # the notification, shade already open
 That is what the pending-navigation record in `web/sw.js` and `_takePending` in
 `lib/push/push_client_web.dart` exist for; see the comments there.
 
+### Wedging the frame pipeline on purpose
+
+The fault `lib/platform/frame_watchdog.dart` recovers from — the App coming back from the background
+showing its last frame and ignoring every tap — has a one-line reproduction, and it is exact rather
+than approximate:
+
+```bash
+node cdp.js eval "window.requestAnimationFrame = function(){ return 0; }"
+```
+
+Both latches that stop frames are cleared only from inside a `requestAnimationFrame` callback, so a
+callback that never arrives is the fault itself rather than an imitation of it. Background the app and
+bring it back and it is wedged: the canvas holds, taps do nothing, and `adb exec-out screencap`
+twice a second apart returns identical bytes. The recovery reloads, which discards the stub, so a
+working watchdog un-wedges itself and a broken one sits there.
+
+Two things this is good for beyond the watchdog. It tells a frozen pipeline from a hung request —
+`let n=0; requestAnimationFrame(()=>n++); setTimeout(()=>console.log(n),1000)` prints `0` on a wedged
+page and `1` on one that is merely waiting on the network — and it proves timers still run in that
+state, which is why the watchdog's deadline is a `Timer` and not a count of animation frames.
+
+**What does not reproduce it**, all tried: backgrounding with `keyevent 3` and returning with
+`monkey`, CDP `Page.setWebLifecycleState` `frozen` → `active`, and `am send-trim-memory
+com.android.chrome COMPLETE`. The emulator runs software GL on a machine with memory to spare, and
+its renderer lifecycle is not a phone's. A device is the only place the natural trigger has been
+seen; the stub is how the recovery is tested anywhere.
+
+**The CDP forward does not survive backgrounding.** `adb forward tcp:9222` dies with the devtools
+socket once Chrome has been in the background a while, and every later `fetch` to `/json/list` fails
+or hangs — which looks exactly like an app that never recovered. Re-run the `adb forward` after any
+wait longer than a few seconds, and drive the phone with `adb` across the gap rather than over CDP.
+
 ## Test the insecure origin too, and know what it costs
 
 Serving Serval over plain HTTP is supported — trying it out should not mean standing up

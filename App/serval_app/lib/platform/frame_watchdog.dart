@@ -34,6 +34,14 @@ import 'frame_watchdog_stub.dart'
 /// here. It reloads, which is the same thing the only available workaround does — closing the App
 /// and opening it again — minus the person having to know that.
 ///
+/// Two properties are what make it fire at all, and both are answers to the same trap: the thing
+/// being measured cannot be the thing doing the measuring. **Nothing it waits on is a
+/// `requestAnimationFrame`** — a latched pipeline is one whose animation frame never arrives, so a
+/// deadline counted in those cannot end in the very state it names; the deadline is a timer, which
+/// a wedged page still runs. And **it does not rely on catching the moment**: it asks on every edge
+/// that could carry a wedge and on a slow heartbeat besides, because an App that is wedged stays
+/// wedged whether or not anything saw it happen.
+///
 /// [route] is where to reload *to*, and it must be the router's own answer rather than the address
 /// bar's. `Router` reports a navigation to the browser from a post-frame callback, so an App that
 /// cannot paint never writes the new address — a tapped notification routed while wedged leaves
@@ -43,3 +51,13 @@ import 'frame_watchdog_stub.dart'
 ///
 /// A no-op off the web, so there is no platform branch at the call site.
 void watchFrames(String Function() route) => platform.watchFrames(route);
+
+/// Asks the question now rather than waiting for an edge or a heartbeat.
+///
+/// For the caller who has just done something on somebody's behalf and knows they are watching for
+/// the result. A tapped notification is the case that matters: it reaches the App through the
+/// service worker's message, which is delivered whether or not the App can paint, so a tap landing
+/// on a wedged App is indistinguishable from a tap that did nothing at all.
+///
+/// A no-op off the web, and a no-op before [watchFrames] has run.
+void probeFrames() => platform.probeFrames();

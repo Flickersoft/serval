@@ -167,8 +167,12 @@ class _WebRtcViewState extends State<WebRtcView> {
     if (_session.isHealthy && away < _staleAfterHidden) return;
 
     // A resume is a person asking for this, not a failure — so it does not spend the budget and it
-    // does not wait out a backoff.
+    // does not wait out a backoff. The backoff already running belongs to the session about to be
+    // replaced, and letting it survive would have it tear down the one built here a few seconds
+    // later, on a screen somebody is by then watching.
     _restarts = 0;
+    _pendingRestart?.cancel();
+    _pendingRestart = null;
     _restart();
   }
 

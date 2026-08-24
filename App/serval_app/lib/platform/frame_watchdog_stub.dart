@@ -5,3 +5,5 @@
 /// specifically — a `requestAnimationFrame` that a hidden page never receives — and a native
 /// embedder drives its frames from a vsync signal that a backgrounded app is simply not sent.
 void watchFrames(String Function() route) {}
+
+void probeFrames() {}
