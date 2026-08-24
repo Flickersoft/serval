@@ -462,6 +462,25 @@ class LiveServalRepository implements ServalRepository {
   /// Not on [ServalRepository] either, matching [start] and [stop]: `SampleServalRepository` has no
   /// sockets and no clock, and a no-op on the interface would be a member the widget tests have to
   /// answer for. `_RepositoryStarter` already narrows before calling any of the three.
+  /// Nobody is looking. Let go of the traffic whose only purpose is to be looked at.
+  ///
+  /// The wall socket alone, and the asymmetry with [resumeLive] is deliberate. `WS /api/events` is
+  /// the alerting path — an alert that arrived while a phone was in a pocket is the single most
+  /// important thing this App carries — and it is nearly free, a message per thing that happens
+  /// rather than a frame per camera per second. Dropping it to save nothing would be trading the
+  /// feature for the bill.
+  ///
+  /// Nothing here is torn down beyond the socket: the registry, the feed and the arrangement are
+  /// all still true, and the wall must be able to paint the moment somebody comes back. That is
+  /// what separates this from [stop], which is about a session ending rather than a person looking
+  /// away.
+  ///
+  /// Not on [ServalRepository], matching [start], [stop] and [resumeLive], for the same reason
+  /// given there.
+  void pauseLive() {
+    _dashboard.pause();
+  }
+
   void resumeLive() {
     _startListening();
     _dashboard.reconnectNow();

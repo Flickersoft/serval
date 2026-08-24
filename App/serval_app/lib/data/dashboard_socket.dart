@@ -127,6 +127,31 @@ class DashboardSocket {
     _connected.add(false);
   }
 
+  /// Lets the socket go while nobody is looking at what comes down it, leaving this ready for a
+  /// later [connect] — which is what `reconnectNow` on the way back amounts to.
+  ///
+  /// Every camera's JPEG arrives here about once a second for as long as this is open, and a phone
+  /// in somebody's pocket is paying for all of it in radio and in battery. Nothing on the other side
+  /// stops: those frames are encoded at `Ingest:SnapshotFps` regardless, to feed the vision pipeline
+  /// and `/snapshot.jpg`, so what this saves is egress and this client's own decoding.
+  ///
+  /// The other half of what it saves is frames. Each arrival writes a notifier, which rebuilds a
+  /// tile, which asks the browser for an animation frame that a hidden page is never given — so an
+  /// open socket guarantees there is a frame outstanding at the moment the page goes away, which is
+  /// the state `frame_watchdog.dart` describes as unrecoverable from the inside.
+  ///
+  /// Deliberately silent, where [disconnect] announces itself: `connected: false` is a claim that
+  /// the Server could not be reached, and this is the App choosing to stop listening. Announcing it
+  /// would also rebuild the whole wall on the way past, which is precisely the frame this is here
+  /// to not schedule.
+  void pause() {
+    if (_closed) return;
+    _teardown();
+    // Somebody coming back should not spend a wait earned before this, and the reconnect that
+    // follows a pause is always a person asking.
+    _backoff = _minBackoff;
+  }
+
   /// Reconnects at once rather than waiting out the backoff.
   ///
   /// For the App coming back from the background, where the backoff is exactly wrong: a phone away
