@@ -57,11 +57,17 @@ void watchFrames(String Function() route) {
 
   // A page restored from the back/forward cache had its whole frame loop suspended and resumed, and
   // it arrives without a `visibilitychange` to say so.
-  web.window.addEventListener('pageshow', ((web.Event _) => unawaited(_probe())).toJS);
+  web.window.addEventListener(
+    'pageshow',
+    ((web.Event _) => unawaited(_probe())).toJS,
+  );
 
   // The Page Lifecycle API's own thaw — what Chrome fires when it releases a PWA it had frozen,
   // which is the state this file exists for.
-  web.document.addEventListener('resume', ((web.Event _) => unawaited(_probe())).toJS);
+  web.document.addEventListener(
+    'resume',
+    ((web.Event _) => unawaited(_probe())).toJS,
+  );
 
   Timer.periodic(_heartbeat, (_) {
     if (web.document.visibilityState == 'visible') unawaited(_probe());
@@ -166,7 +172,9 @@ void _reportRecovery() {
     // Cleared before it is reported, so one recovery is announced once however this launch goes on
     // to end.
     web.window.localStorage.removeItem(_breadcrumbKey);
-    debugPrint('FrameWatchdog: recovered from a latched frame pipeline — $note');
+    debugPrint(
+      'FrameWatchdog: recovered from a latched frame pipeline — $note',
+    );
   } catch (_) {
     // As above.
   }
