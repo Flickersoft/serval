@@ -63,11 +63,30 @@ public sealed class FfmpegSnapshotSession
         PreviewRing.Reset(_cameraDir);
 
         // Asked for the frame size, which both frame outputs need, and — now that the ring copies
-        // this stream to disk — for its codec, which decides whether the ring can exist at all. A
-        // source that will not answer costs the raw detect frames and the ring; the JPEG path needs
-        // neither.
+        // this stream to disk — for its codec, which decides whether the ring can exist at all.
         VideoProbe probe = await SourceProbe.VideoAsync(
             _stream.Url, _options.FfprobePath, _camera.Id, _logger, cancellationToken);
+
+        // A source that will not give its dimensions gets no session at all, rather than one built
+        // from the outputs that do not need them. The JPEG leg needs neither dimensions nor codec,
+        // so a snapshot-only session starts cleanly and stays up: ffmpeg is running and producing
+        // exactly what it was asked for, the wall and /snapshot.jpg are live, and every symptom of
+        // detection having no frames — and no way to ever get them, because nothing here fails and
+        // so nothing retries — surfaces somewhere else entirely, as an AI session restarting on its
+        // idle timeout for as long as the process lives.
+        //
+        // Thrown rather than raised as IngestConfigurationException: a stream that did not answer
+        // inside the probe timeout is a source problem that usually clears on its own, so this
+        // wants the supervisor's exponential backoff, not the go-to-the-cap-and-wait-for-an-edit
+        // path that exists for settings a human has to change. The recording half refuses an
+        // unplannable session on the same principle — see IngestPlanner.ResolveVideo.
+        if (_options.DetectFps > 0 && probe is not { Width: > 0, Height: > 0 })
+        {
+            throw new InvalidOperationException(
+                $"Stream '{_stream.Name}' did not report its frame size, so this session could "
+                + "produce snapshots but no frames for object detection. Retrying until the probe "
+                + "answers.");
+        }
 
         DetectFramePlan? detect = DetectFrameReader.Plan(_camera.Id, probe, _options, _logger);
 

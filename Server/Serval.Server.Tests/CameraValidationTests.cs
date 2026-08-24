@@ -479,6 +479,20 @@ public class CameraValidationTests
     }
 
     [Fact]
+    public void A_detection_override_holding_only_the_switch_survives_the_collapse()
+    {
+        // The counterpart to the test above, and the one that would break the feature silently:
+        // "this camera does not detect" is a real instruction with nothing else beside it, and
+        // collapsing it to null would send the camera back to following the server on every save.
+        Camera camera = WithDetection(new CameraDetectionTuning { Enabled = false });
+
+        CameraRepository.Validate(camera);
+
+        Assert.NotNull(camera.DetectionTuning);
+        Assert.False(camera.DetectionTuning.Enabled);
+    }
+
+    [Fact]
     public void An_empty_class_list_is_rejected_rather_than_interpreted()
     {
         // It could defensibly mean "everything" or "nothing", and a camera silently detecting

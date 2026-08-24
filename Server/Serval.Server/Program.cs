@@ -301,6 +301,11 @@ builder.Services.AddHostedService<GoogleHomeStateWorker>();
 // clips out of it.
 builder.Services.AddSingleton<PreviewRingIndex>();
 
+// How the AI half asks ingest to rebuild a detect session whose frames have stopped reaching it.
+// Registered unconditionally, and outside the AI block below: the ingest manager takes it whether
+// or not anything is running detection, and a camera's detect session exists either way.
+builder.Services.AddSingleton<DetectSessionRestarts>();
+
 builder.Services.AddHostedService<StreamIngestManager>();
 builder.Services.AddHostedService<RetentionWorker>();
 

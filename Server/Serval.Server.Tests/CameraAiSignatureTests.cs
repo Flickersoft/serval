@@ -508,4 +508,43 @@ public class CameraAiSignatureTests
         Assert.NotEqual(
             Signature(Detect(new CameraDetectionTuning { MaxFps = 1.0 })),
             Signature(Detect(new CameraDetectionTuning { MaxFps = 0.2 })));
+
+    /// <summary>The signature against a server that is looking for objects, which is the only state
+    /// in which a camera's own switch has anything to disagree with.</summary>
+    private static string SignatureWhileDetecting(Camera camera)
+    {
+        var ai = new AiOptions();
+        ai.Detection.Enabled = true;
+        return CameraAiCoordinator.Signature(camera, ai);
+    }
+
+    /// <summary>
+    /// The per-camera detection switch is not a term of <see cref="CameraAiCoordinator.Signature"/>
+    /// on its own — it reaches the digest through the effective options, like every other override.
+    /// If it ever stops doing so the toggle saves, the App reports it, and the running session keeps
+    /// detecting until something unrelated restarts it.
+    /// </summary>
+    [Fact]
+    public void Switching_a_cameras_object_detection_off_changes_the_signature() =>
+        Assert.NotEqual(
+            SignatureWhileDetecting(Detect(null)),
+            SignatureWhileDetecting(Detect(new CameraDetectionTuning { Enabled = false })));
+
+    [Fact]
+    public void Switching_the_server_off_changes_every_inheriting_cameras_signature() =>
+        Assert.NotEqual(
+            SignatureWhileDetecting(Detect(null)),
+            Signature(Detect(null)));
+
+    /// <summary>
+    /// Pinning a camera to what the server already says is not a restart, because the digest is over
+    /// the effective settings rather than over the list of fields a camera overrides — the two
+    /// resolve to the same thing and a session cannot tell them apart. Recorded here because this is
+    /// the one place that design is visible from the outside.
+    /// </summary>
+    [Fact]
+    public void An_override_equal_to_the_server_value_is_not_a_restart() =>
+        Assert.Equal(
+            SignatureWhileDetecting(Detect(null)),
+            SignatureWhileDetecting(Detect(new CameraDetectionTuning { Enabled = true })));
 }

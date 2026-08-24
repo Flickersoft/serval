@@ -17,6 +17,11 @@ namespace Serval.Server.Cameras;
 /// empty-array cases are rejected rather than interpreted for a similar reason: an empty class
 /// list could defensibly mean "everything" or "nothing", and a camera that silently detects
 /// nothing while its configuration looks deliberate is the worse of the two readings.</para>
+///
+/// <para>Refusing all of that is only fair because there is now an honest way to say it:
+/// <see cref="CameraDetectionTuning.Enabled"/> switches a camera's detector off in as many words.
+/// So a <c>ScoreThreshold</c> of 1 is still rejected, and the person who reached for it has
+/// somewhere to go that reads the same way to whoever finds the camera later.</para>
 /// </summary>
 internal static class TuningCatalog
 {
@@ -68,14 +73,29 @@ internal static class TuningCatalog
         }
     }
 
-    internal static readonly IReadOnlyList<IKnob<CameraDetectionTuning, DetectionOptions>> Detection =
+    /// <summary>
+    /// Whether this camera detects at all. The one knob with nothing to validate: both values are
+    /// meaningful, and unset is a third meaning rather than a missing one.
+    /// </summary>
+    private static readonly IKnob<CameraDetectionTuning, DetectionOptions> DetectionSwitch =
+        new ValueKnob<CameraDetectionTuning, DetectionOptions, bool>(
+            t => t.Enabled,
+            _ => null,
+            (d, v) => d.Enabled = v);
+
+    /// <summary>
+    /// Every detection knob but the switch — the ones saying <em>how</em> this camera detects rather
+    /// than <em>whether</em> it does. Named apart so an advisory can report them as stored and unread
+    /// without counting the switch that made them unread.
+    /// </summary>
+    internal static readonly IReadOnlyList<IKnob<CameraDetectionTuning, DetectionOptions>> DetectionThresholds =
     [
         new ListKnob<CameraDetectionTuning, DetectionOptions, string[]>(
             t => t.Classes,
             v => v.Length == 0
                 ? "Classes must name at least one class when set. Omit it to inherit the server "
                     + "default; an empty list would leave this camera detecting nothing while looking "
-                    + "deliberately configured."
+                    + "deliberately configured. To stop this camera detecting, set Enabled to false."
                 : null,
             (d, v) => d.Classes = [.. v]),
         new ListKnob<CameraDetectionTuning, DetectionOptions, string[]>(
@@ -166,6 +186,11 @@ internal static class TuningCatalog
                 : null,
             (d, v) => d.NoveltySeconds = v),
     ];
+
+    /// <summary>The switch first, so a camera's resolved options read in the order the settings page
+    /// asks about them: whether, then how.</summary>
+    internal static readonly IReadOnlyList<IKnob<CameraDetectionTuning, DetectionOptions>> Detection =
+        [DetectionSwitch, .. DetectionThresholds];
 
     /// <summary>
     /// The audio knobs write straight onto the resolved <see cref="AiOptions"/>, replacing whole

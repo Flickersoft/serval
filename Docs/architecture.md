@@ -51,8 +51,10 @@ which normalizes it to one codec — the single decode path the whole front end 
   dashboard, WebRTC and **AI** all run off it. The AI is the *same detection library* the edge
   CameraModule runs, hosted inside the Server, storing the **same telemetry** to MongoDB. A camera
   gets AI whether or not it has an edge device — edge cameras run it locally, module-less cameras
-  have the Server run it for them. It is opt-in per camera (`AiVision` / `AiAudio`), because one
-  vision model is shared across every camera in the process.
+  have the Server run it for them. Each of its three capabilities is chosen per camera and they are
+  independent: `AiVision` for scene descriptions and `AiAudio` for speech and sounds are both
+  opt-in, because one vision model is shared across every camera in the process; object detection is
+  `DetectionTuning.Enabled`, which follows the Server's own switch unless a camera says otherwise.
 - **Module camera:** a camera attached to an edge device (Orange Pi / RK3588) running the
   **CameraModule**. The module captures the camera locally, runs AI in-process — who's speaking,
   what's said, emotion, audio events, scene descriptions — and POSTs **telemetry** to the Server.

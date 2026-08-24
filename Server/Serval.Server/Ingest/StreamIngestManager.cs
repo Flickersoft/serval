@@ -18,11 +18,16 @@ public sealed class StreamIngestManager : BackgroundService
 {
     private static readonly TimeSpan ReconcileInterval = TimeSpan.FromSeconds(5);
 
+    /// <summary>The supervised role that writes detect frames, and so the one
+    /// <see cref="DetectSessionRestarts"/> can reach.</summary>
+    private const string DetectRole = "detect";
+
     private readonly CameraRepository _cameras;
     private readonly RecordingIndex _recordings;
     private readonly SnapshotBroadcaster _snapshots;
     private readonly DetectFrameBroadcaster _detectFrames;
     private readonly PreviewRingIndex _previewRing;
+    private readonly DetectSessionRestarts _detectRestarts;
     private readonly IOptionsMonitor<ServerOptions> _options;
     private readonly FfmpegCapabilities _capabilities;
     private readonly string _mediaRoot;
@@ -45,6 +50,7 @@ public sealed class StreamIngestManager : BackgroundService
         SnapshotBroadcaster snapshots,
         DetectFrameBroadcaster detectFrames,
         PreviewRingIndex previewRing,
+        DetectSessionRestarts detectRestarts,
         IOptionsMonitor<ServerOptions> options,
         FfmpegCapabilities capabilities,
         ILoggerFactory loggerFactory)
@@ -54,6 +60,7 @@ public sealed class StreamIngestManager : BackgroundService
         _snapshots = snapshots;
         _detectFrames = detectFrames;
         _previewRing = previewRing;
+        _detectRestarts = detectRestarts;
         _options = options;
         _capabilities = capabilities;
 
@@ -336,15 +343,31 @@ public sealed class StreamIngestManager : BackgroundService
 
             while (!cts.IsCancellationRequested)
             {
+                // One token per attempt, linked to the camera's. It is what lets a restart request
+                // end the session that is running without ending the loop that has to replace it —
+                // cancelling the camera's own token would stop supervising this role for good.
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+
+                // Only the detect role: it is the one that writes the frames the AI half reads, and
+                // so the only one anything asks to restart. A null registration for every other
+                // role keeps the using below honest without a branch around it.
+                using IDisposable? restartable = role == DetectRole
+                    ? _detectRestarts.Register(camera.Id, () => RequestStop(attempt))
+                    : null;
+
                 try
                 {
-                    await run(cts.Token);
+                    await run(attempt.Token);
                     // A clean exit resets the backoff.
                     backoff = TimeSpan.FromSeconds(_options.CurrentValue.Ingest.ReconnectSeconds);
                 }
                 catch (OperationCanceledException) when (cts.IsCancellationRequested)
                 {
                     break;
+                }
+                catch (OperationCanceledException) when (attempt.IsCancellationRequested)
+                {
+                    // Handled below, with the clean-return ending of the same event.
                 }
                 catch (IngestConfigurationException ex)
                 {
@@ -365,6 +388,25 @@ public sealed class StreamIngestManager : BackgroundService
                         camera.Id, role, backoff);
                 }
 
+                // Reported here rather than from a catch, because a requested restart has two
+                // endings and this is the only place both arrive. Cancelling the token mid-write
+                // makes ffmpeg exit non-zero, and FfmpegRunner deliberately reports nothing when
+                // the token it was handed is the one that stopped it — so the usual ending is a
+                // clean return, and the exception is only what a cancel before ffmpeg started
+                // produces.
+                //
+                // Neither is a fault or a dead source, so the backoff earned by whatever the
+                // session was doing before the request is dropped; this goes round again at the
+                // base delay.
+                if (attempt.IsCancellationRequested && !cts.IsCancellationRequested)
+                {
+                    sessionLogger.LogInformation(
+                        "Camera {CameraId} {Role} stream restarting: its frames stopped reaching "
+                        + "the AI session.",
+                        camera.Id, role);
+                    backoff = TimeSpan.FromSeconds(_options.CurrentValue.Ingest.ReconnectSeconds);
+                }
+
                 try
                 {
                     await Task.Delay(backoff, cts.Token);
@@ -377,6 +419,25 @@ public sealed class StreamIngestManager : BackgroundService
                 backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, MaxBackoff.Ticks));
             }
         });
+
+    /// <summary>
+    /// Cancels one attempt's token on behalf of a restart request.
+    ///
+    /// Swallows the disposal race rather than locking against it: a request can read an attempt's
+    /// canceller a moment before that attempt ends on its own and disposes the token behind it. The
+    /// restart it was asking for is already happening, so there is nothing left to do and nothing
+    /// worth logging.
+    /// </summary>
+    private static void RequestStop(CancellationTokenSource attempt)
+    {
+        try
+        {
+            attempt.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
 
     /// <summary>
     /// Stops every session at once, on the way out.

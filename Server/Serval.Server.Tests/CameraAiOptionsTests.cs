@@ -380,4 +380,35 @@ public class CameraAiOptionsTests
             CameraAiOptions.For(
                 global, null, null, new CameraSoundTuning(), new CameraMotionTuning()));
     }
+
+    /// <summary>
+    /// The switch is the first <c>bool</c> to travel this route, and the one where a write reaching
+    /// the shared instance would be loudest: one camera opting out would stop every other camera
+    /// detecting, with the logs showing exactly the setting the operator asked for.
+    /// </summary>
+    [Fact]
+    public void Switching_detection_off_for_one_camera_never_reaches_the_shared_defaults()
+    {
+        var global = new AiOptions();
+        global.Detection.Enabled = true;
+
+        AiOptions resolved = CameraAiOptions.For(
+            global, null, new CameraDetectionTuning { Enabled = false });
+
+        Assert.False(resolved.Detection.Enabled);
+        Assert.True(global.Detection.Enabled);
+        Assert.NotSame(global.Detection, resolved.Detection);
+    }
+
+    [Fact]
+    public void A_camera_that_only_tunes_thresholds_still_inherits_the_switch()
+    {
+        var global = new AiOptions();
+        global.Detection.Enabled = true;
+
+        AiOptions resolved = CameraAiOptions.For(
+            global, null, new CameraDetectionTuning { MaxFps = 2 });
+
+        Assert.True(resolved.Detection.Enabled);
+    }
 }

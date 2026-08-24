@@ -34,6 +34,7 @@ public sealed class CameraAiCoordinator : BackgroundService
     private readonly CameraRepository _cameras;
     private readonly SnapshotBroadcaster _snapshots;
     private readonly DetectFrameBroadcaster _detectFrames;
+    private readonly Ingest.DetectSessionRestarts _detectRestarts;
     private readonly DetectionLoad _load;
     private readonly SceneDescriptionWorker? _vision;
     private readonly IObjectDetector? _detector;
@@ -69,6 +70,7 @@ public sealed class CameraAiCoordinator : BackgroundService
         CameraRepository cameras,
         SnapshotBroadcaster snapshots,
         DetectFrameBroadcaster detectFrames,
+        Ingest.DetectSessionRestarts detectRestarts,
         DetectionLoad load,
         TelemetryRepository repository,
         EventBroadcaster events,
@@ -85,6 +87,7 @@ public sealed class CameraAiCoordinator : BackgroundService
         _cameras = cameras;
         _snapshots = snapshots;
         _detectFrames = detectFrames;
+        _detectRestarts = detectRestarts;
         _load = load;
         _repository = repository;
         _events = events;
@@ -289,18 +292,25 @@ public sealed class CameraAiCoordinator : BackgroundService
     /// <summary>
     /// Whether to watch this camera's frames at all.
     ///
-    /// Either capability is enough on its own, and that matters: <see cref="SceneDescriptionWorker"/>
-    /// is only registered when a 2.3 GB vision model is on disk, while the object detector needs one
-    /// a couple of hundred times smaller. Requiring the worker would mean a host that has the
-    /// detector and not the model — by far the more likely first deployment — silently never looked
-    /// at anything.
+    /// <para><b>Each capability pairs with its own model.</b> Describing scenes and looking for
+    /// objects are two things a camera can ask for separately: a drive worth detecting on is not
+    /// necessarily worth seconds of a 2.3 GB model's time, and a camera watching a quiet room can be
+    /// worth a description without being worth a share of the inference budget. So a camera is
+    /// watched when something it asked for has a model to run on, and the pairing is what stops a
+    /// host that has the detector and not the vision model — by far the more likely first
+    /// deployment — from either silently never looking at anything or running the detector on a
+    /// camera that only ever wanted prose.</para>
     /// </summary>
-    private bool WantsVision(Camera camera) =>
-        WantsVision(camera.AiVision, _vision is not null, _detector is not null);
+    private bool WantsVision(Camera camera) => WantsVision(
+        camera.AiVision,
+        Effective(camera).Detection.Enabled,
+        _vision is not null,
+        _detector is not null);
 
     /// <summary>The rule on its own, so it can be pinned without standing up a host.</summary>
-    internal static bool WantsVision(bool aiVision, bool hasVisionModel, bool hasDetector) =>
-        aiVision && (hasVisionModel || hasDetector);
+    internal static bool WantsVision(
+        bool describes, bool detects, bool hasVisionModel, bool hasDetector) =>
+        (describes && hasVisionModel) || (detects && hasDetector);
 
     private bool WantsAudio(Camera camera) =>
         camera.AiAudio && _analyzer is not null && camera.DetectStream is not null;
@@ -336,7 +346,12 @@ public sealed class CameraAiCoordinator : BackgroundService
     /// full.</para>
     ///
     /// <para>Static, and taking the server-wide settings as an argument, so it can be pinned
-    /// without standing up a host — the same reason <see cref="WantsVision(bool, bool, bool)"/> is.</para>
+    /// without standing up a host — the same reason
+    /// <see cref="WantsVision(bool, bool, bool, bool)"/> is.</para>
+    ///
+    /// <para>The per-camera object-detection switch is deliberately not a term of its own: it lives
+    /// in <see cref="DetectionOptions.Enabled"/> and so already reaches the digest through the
+    /// effective settings. Naming it here as well would digest it twice.</para>
     /// </summary>
     internal static string Signature(Camera camera, AiOptions global) =>
         $"{camera.DetectStream?.Url}|{camera.AiVision}|{camera.AiAudio}"
@@ -345,15 +360,23 @@ public sealed class CameraAiCoordinator : BackgroundService
     private void Start(Camera camera)
     {
         var cts = new CancellationTokenSource();
-        var session = new Session(
-            Signature(camera), cts, WantsVision(camera) && _detector is not null);
+        AiOptions ai = Effective(camera);
+        bool detects = CameraVisionPipeline.Detects(ai, _detector is not null);
+
+        // Asked the same way the pipeline will ask it, rather than inferred from WantsVision — that
+        // is now true for a camera wanting only descriptions, and counting one of those against the
+        // inference budget would report every detecting camera a smaller share than it really gets.
+        var session = new Session(Signature(camera), cts, detects);
 
         session.Task = RunSupervisedAsync(camera, cts.Token);
         _sessions[camera.Id] = session;
 
+        // The two vision halves are logged apart because they are now separately switchable, and
+        // one "vision=True" no longer says which of them a camera actually got.
         _logger.LogInformation(
-            "Started AI for camera {CameraId} (vision={Vision}, audio={Audio}).",
-            camera.Id, WantsVision(camera), WantsAudio(camera));
+            "Started AI for camera {CameraId} (descriptions={Describes}, objects={Detects}, "
+                + "audio={Audio}).",
+            camera.Id, camera.AiVision && _vision is not null, detects, WantsAudio(camera));
     }
 
     /// <summary>
@@ -400,12 +423,13 @@ public sealed class CameraAiCoordinator : BackgroundService
     {
         var jobs = new List<Func<CancellationToken, Task>>();
 
-        // Derived once, here, and handed to both halves. Vision has no per-camera overrides today,
-        // but having a single point where a camera's settings are resolved means adding one later
-        // is a change inside CameraAiOptions rather than a new read of the globals out here.
+        // Derived once, here, and handed to both halves — including to the capability question
+        // below, which reads this camera's detection switch out of it rather than resolving the
+        // camera's settings a second time to ask.
         AiOptions ai = Effective(camera);
 
-        if (WantsVision(camera))
+        if (WantsVision(
+            camera.AiVision, ai.Detection.Enabled, _vision is not null, _detector is not null))
         {
             jobs.Add(token => RunVisionAsync(camera, ai, token));
         }
@@ -445,9 +469,18 @@ public sealed class CameraAiCoordinator : BackgroundService
     /// </summary>
     private async Task RunVisionAsync(Camera camera, AiOptions ai, CancellationToken cancellationToken)
     {
+        // The worker is withheld from a camera that detects without wanting prose, which is the
+        // whole of what "descriptions off, objects on" costs. Registering it anyway would put the
+        // camera into the worker's round-robin to be skipped forever, taking a turn from cameras
+        // that do want describing.
         using var pipeline = new CameraVisionPipeline(
-            camera, ai, _vision, _detector, _loggerFactory.CreateLogger<CameraVisionPipeline>(),
-            _scheduler, _load);
+            camera,
+            ai,
+            camera.AiVision ? _vision : null,
+            _detector,
+            _loggerFactory.CreateLogger<CameraVisionPipeline>(),
+            _scheduler,
+            _load);
 
         try
         {
@@ -539,9 +572,21 @@ public sealed class CameraAiCoordinator : BackgroundService
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                // The ingest session too, not this one alone. Frames stop for two different kinds
+                // of reason and only one of them is on this side: a reader that has wedged is fixed
+                // by rebuilding it, and a writer that has stopped is not fixed by anything that
+                // happens here — re-subscribing to a producer that is no longer producing gets the
+                // same silence and the same timeout, forever, at whatever the idle period is.
+                //
+                // Asked for before returning because the request is a signal and not a handshake:
+                // it hands the ingest supervisor a token to cancel and comes straight back, so both
+                // halves rebuild at once rather than this one waiting on the other.
                 _logger.LogWarning(
-                    "Camera {CameraId}: no detect frame for {Seconds:0}s; restarting its AI session.",
+                    "Camera {CameraId}: no detect frame for {Seconds:0}s; restarting its AI session "
+                    + "and asking its detect ingest session to restart.",
                     camera.Id, idleTimeout.TotalSeconds);
+
+                _detectRestarts.Request(camera.Id);
                 return;
             }
 

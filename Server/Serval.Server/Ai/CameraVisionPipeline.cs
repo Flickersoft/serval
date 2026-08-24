@@ -18,15 +18,23 @@ namespace Serval.Server.Ai;
 /// Two gates can stand in front of the vision model and only one runs:
 ///
 /// <list type="bullet">
-/// <item><b>Object detection</b>, when a detector is loaded and enabled. It reports what is present,
-/// which is what makes "a person arrived" and "the car parked here has left" expressible.</item>
-/// <item><b>Frame differencing</b> otherwise — the path for a host with no model on disk.</item>
+/// <item><b>Object detection</b>, when a detector is loaded and this camera is set to use it. It
+/// reports what is present, which is what makes "a person arrived" and "the car parked here has
+/// left" expressible.</item>
+/// <item><b>Frame differencing</b> otherwise — the path for a host with no model on disk, and for a
+/// camera that has switched detection off.</item>
 /// </list>
 ///
 /// **Alternatives rather than a chain.** Running motion in front of the detector buys a little
 /// compute and inherits both of its blind spots: a whole-frame lighting change is discarded as "not
 /// motion" exactly when a floodlight has come on because someone is there, and slow or distant
 /// movement never reaches the threshold at all.
+///
+/// <para><b>The gate outlives the thing it gates.</b> Detection and scene description are separate
+/// capabilities, so the detector runs whether or not there is a vision model behind it — a camera
+/// can record what is there and never be asked to write prose about it. Which of the two gates runs
+/// is decided here regardless; whether anything is described is decided by whether this pipeline was
+/// handed a worker.</para>
 ///
 /// <para><b>Two inputs, and the split is deliberate.</b> Detection runs on raw frames from
 /// <see cref="Ingest.DetectFrameReader"/>, already scaled and never through a JPEG — re-encoding a
@@ -39,6 +47,9 @@ public sealed class CameraVisionPipeline : IDisposable
 {
     private readonly Camera _camera;
     private readonly AiOptions _ai;
+    /// <summary>Null when this camera produces no descriptions — either because no vision model is
+    /// loaded on this host, or because the camera detects without wanting prose written about it.
+    /// The pipeline cannot tell the two apart and does not need to.</summary>
     private readonly SceneDescriptionWorker? _vision;
     private readonly IObjectDetector? _detector;
     private readonly SceneDescriptionService? _scenes;
@@ -124,7 +135,15 @@ public sealed class CameraVisionPipeline : IDisposable
     }
 
     /// <summary>Whether the object gate is the one running. False means frame differencing.</summary>
-    public bool UsesDetection => _detector is not null && _ai.Detection.Enabled;
+    public bool UsesDetection => Detects(_ai, _detector is not null);
+
+    /// <summary>
+    /// The rule on its own, so <see cref="CameraAiCoordinator"/> can answer the same question before
+    /// a pipeline exists — it has to count detecting cameras to divide the inference budget, and a
+    /// second hand-written copy of this is how that count drifts from what is actually running.
+    /// </summary>
+    internal static bool Detects(AiOptions ai, bool hasDetector) =>
+        hasDetector && ai.Detection.Enabled;
 
     /// <summary>
     /// Folds one snapshot in: it is always a candidate frame for a description, and on a host with no
@@ -534,8 +553,9 @@ public sealed class CameraVisionPipeline : IDisposable
     {
         if (_vision is null || _scenes is null)
         {
-            // Detection without a vision model is a supported deployment: the 12 MB detector runs,
-            // episodes are recorded, and there is simply nothing to describe them with.
+            // Detection without descriptions is a supported deployment twice over: a host with the
+            // 12 MB detector and no vision model, and a camera that asked for objects and not prose.
+            // Either way episodes are recorded and there is nothing to describe them with.
             return;
         }
 

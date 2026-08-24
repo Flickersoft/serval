@@ -103,6 +103,7 @@ public static class CameraRegistryCheck
         }
 
         AudioTuningAdvisories(camera, options, advisories);
+        DetectionTuningAdvisories(camera, options, advisories);
 
         return advisories;
     }
@@ -230,6 +231,57 @@ public static class CameraRegistryCheck
                     + "16-bit capture. The gate will never close and the model will run on room "
                     + "tone continuously — which is the cost the gate exists to avoid.");
             }
+        }
+    }
+
+    /// <summary>
+    /// A camera asking to detect on a server that cannot, and thresholds kept for a detector that is
+    /// not looking at this camera.
+    ///
+    /// <para><b>The asymmetry is the one worth saying out loud.</b>
+    /// <c>Serval:Ai:Detection:Enabled</c> decides whether a model is loaded at all, so a camera that
+    /// switches detection on under a server switch that is off is stored, shown in the App, and
+    /// inert — there is no detector for it to be chosen out of. The way to run detection on two
+    /// cameras is to turn the server switch on and the other cameras off, which is the opposite of
+    /// what the two settings look like they do.</para>
+    ///
+    /// <para>Deliberately silent about a camera with <see cref="Camera.AiVision"/> off and detection
+    /// inherited on. That is a legitimate steady state — record what is there, write no prose about
+    /// it — and these are logged at warning level once per startup, so anything permanent and
+    /// intentional in here is noise that teaches people to skip the rest.</para>
+    /// </summary>
+    private static void DetectionTuningAdvisories(
+        Camera camera, ServerOptions options, List<string> advisories)
+    {
+        if (camera.DetectionTuning is not { } tuning)
+        {
+            return;
+        }
+
+        if (tuning.Enabled == true && !options.ServerAi.Enabled)
+        {
+            advisories.Add(
+                $"Camera {camera.Id} asks to look for objects but Serval:ServerAi:Enabled is false, "
+                + "so no models are loaded and nothing will be detected.");
+        }
+
+        if (tuning.Enabled == true && options.ServerAi.Enabled && !options.Ai.Detection.Enabled)
+        {
+            advisories.Add(
+                $"Camera {camera.Id} asks to look for objects but Serval:Ai:Detection:Enabled is "
+                + "false, so no detector is loaded and no camera looks for objects. Turn it on "
+                + "there; cameras that should not detect can then be switched off one at a time.");
+        }
+
+        // The mirror of the AiAudio advisory above, and the same trap: thresholds tuned against a
+        // real view, then detection switched off, and the next person reads them as being in force.
+        if (TuningCatalog.HasAnyOverride(tuning, TuningCatalog.DetectionThresholds)
+            && !(tuning.Enabled ?? options.Ai.Detection.Enabled))
+        {
+            advisories.Add(
+                $"Camera {camera.Id} sets object-detection thresholds but is not looking for "
+                + "objects, so nothing reads them. They are kept, and take effect if it is turned "
+                + "back on.");
         }
     }
 }
