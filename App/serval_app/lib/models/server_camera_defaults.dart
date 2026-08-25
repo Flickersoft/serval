@@ -20,7 +20,15 @@ import 'server_settings.dart';
 /// wins whenever it is there. A range here that disagrees with the Server's is a bug in this table,
 /// not a second opinion.
 enum CameraSetting {
-  // What it looks for — `CameraDetectionTuning`.
+  // Whether it looks at all, then what it looks for — `CameraDetectionTuning`.
+  detectionEnabled(
+    'Serval:Ai:Detection:Enabled',
+    label: 'Look for objects',
+    help:
+        'Runs the detector on this camera, so it can say what is there rather than only that '
+        'something moved. Left alone it follows the Server.',
+    kind: SettingKind.boolean,
+  ),
   detectionClasses(
     'Serval:Ai:Detection:Classes',
     label: 'Record these objects',

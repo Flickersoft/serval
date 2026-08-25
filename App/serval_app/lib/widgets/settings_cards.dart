@@ -500,7 +500,7 @@ class SettingCard extends StatelessWidget {
                   if (pending)
                     const SettingBadge('not saved', accent: true)
                   else if (source case final source?)
-                    _SettingSourceChip(source: source),
+                    SettingSourceChip(source: source),
                   if (restartRequired) const SettingBadge('needs a restart'),
                 ],
               ),
@@ -819,8 +819,8 @@ class _SettingTextControlState extends State<SettingTextControl> {
 /// A camera field uses the same three states, because it has the same three: a value set on this
 /// camera is [SettingSource.user], one that falls through to the Server is [SettingSource.builtIn],
 /// and [SettingSource.deployment] simply never occurs on a camera.
-class _SettingSourceChip extends StatelessWidget {
-  const _SettingSourceChip({required this.source});
+class SettingSourceChip extends StatelessWidget {
+  const SettingSourceChip({super.key, required this.source});
 
   final SettingSource source;
 

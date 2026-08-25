@@ -238,6 +238,26 @@ public class CameraBsonSerializationTests
     }
 
     [Fact]
+    public void The_detection_switch_round_trips_and_an_absent_one_reads_as_inherit()
+    {
+        Camera camera = Camera();
+        camera.DetectionTuning = new CameraDetectionTuning { Enabled = false };
+
+        var restored = BsonSerializer.Deserialize<Camera>(camera.ToBsonDocument());
+
+        Assert.False(restored.DetectionTuning!.Enabled);
+
+        // Every camera written before this field existed has no element for it, and must come back
+        // following the server rather than switched off.
+        Camera older = Camera();
+        older.DetectionTuning = new CameraDetectionTuning { MaxFps = 2 };
+        BsonDocument document = older.ToBsonDocument();
+        document["DetectionTuning"].AsBsonDocument.Remove("Enabled");
+
+        Assert.Null(BsonSerializer.Deserialize<Camera>(document).DetectionTuning!.Enabled);
+    }
+
+    [Fact]
     public void An_untuned_camera_stores_no_detection_field_at_all()
     {
         // [BsonIgnoreIfNull], and it matters: a null field would make "this camera has custom

@@ -131,11 +131,16 @@ public sealed class Camera
     public double? PlaybackGateRmsThreshold { get; set; }
 
     /// <summary>
-    /// Run server-side scene description for this camera, gated on motion.
+    /// Run server-side scene description for this camera, gated on movement — or on what the object
+    /// detector finds, when this camera is also looking for objects.
     ///
     /// This is the point of the shared detection library: a camera with no edge module still gets
     /// AI, run by the Server on its behalf. Off by default because the vision model costs seconds
     /// of CPU per description and one model instance is shared across every camera.
+    ///
+    /// <para>Descriptions only. It does not switch the object detector on or off — that is
+    /// <see cref="CameraDetectionTuning.Enabled"/>, and the two are independent so a camera can
+    /// record what is there without being asked to write prose about it, or the reverse.</para>
     /// </summary>
     public bool AiVision { get; set; }
 
@@ -155,9 +160,11 @@ public sealed class Camera
     public CameraAudioTuning? AudioTuning { get; set; }
 
     /// <summary>
-    /// Per-camera overrides for object detection; null falls back to the server defaults under
-    /// <c>Serval:Ai:Detection</c>. See <see cref="CameraDetectionTuning"/> — masks especially have
-    /// no sensible global value, because where a property line runs is a fact about one camera.
+    /// Per-camera overrides for object detection, starting with
+    /// <see cref="CameraDetectionTuning.Enabled"/> — whether this camera is looked at by the
+    /// detector at all. Null falls back to the server defaults under <c>Serval:Ai:Detection</c>. See
+    /// <see cref="CameraDetectionTuning"/> — masks especially have no sensible global value, because
+    /// where a property line runs is a fact about one camera.
     /// </summary>
     [BsonIgnoreIfNull]
     public CameraDetectionTuning? DetectionTuning { get; set; }
@@ -172,7 +179,7 @@ public sealed class Camera
 
     /// <summary>
     /// Per-camera overrides for the movement gate; null falls back to <c>Serval:Ai:Motion</c>. Only
-    /// reached on a server with object detection switched off, which is where it is the only thing
+    /// reached when this camera is not looking for objects, which is where it is the only thing
     /// deciding whether the description model runs — see <see cref="CameraMotionTuning"/>.
     /// </summary>
     [BsonIgnoreIfNull]

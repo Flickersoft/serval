@@ -5,9 +5,9 @@ using Serval.Ai;
 namespace Serval.Server.Cameras;
 
 /// <summary>
-/// One camera's overrides for what its object detector looks for and what is worth waking the
-/// vision model over. Every field is optional; null means "use the server default", exactly as
-/// <see cref="CameraAudioTuning"/> does.
+/// One camera's overrides for whether its object detector runs at all, what it looks for, and what
+/// is worth waking the vision model over. Every field is optional; null means "use the server
+/// default", exactly as <see cref="CameraAudioTuning"/> does.
 ///
 /// <para>A sibling of that type rather than fields on it, because vision knobs on something called
 /// <c>AudioTuning</c> would be a lie that outlives whoever wrote it. The two are resolved together
@@ -24,6 +24,20 @@ namespace Serval.Server.Cameras;
 /// </summary>
 public sealed class CameraDetectionTuning
 {
+    /// <summary>
+    /// Overrides <c>Serval:Ai:Detection:Enabled</c> — whether this camera is looked at by the object
+    /// detector. Null inherits, which is what makes the server switch mean "detect on every camera
+    /// that does not say otherwise" rather than "detect on the cameras listed twice".
+    ///
+    /// <para>It cannot resurrect a detector the process never opened: the server key decides whether
+    /// a model is loaded at all, and this chooses within a server that loaded one. A camera asking
+    /// for detection on a server with the key off is inert, and says so as a startup advisory.</para>
+    ///
+    /// <para>Switching it off leaves the camera on the frame-differencing gate, so scene
+    /// descriptions carry on being triggered by movement. The two are separate capabilities.</para>
+    /// </summary>
+    public bool? Enabled { get; set; }
+
     /// <summary>
     /// Overrides <c>Serval:Ai:Detection:Classes</c> — which of the model's classes this camera
     /// records at all. Null inherits; an empty array is rejected at the API rather than silently

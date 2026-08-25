@@ -22,8 +22,20 @@ many cameras:
 | **Motion** | the same, on hosts with no detection model | Frame differencing on a downscaled luma plane. A near-total change is *rejected* rather than reported — that is the IR-cut filter or a light switching on, not movement. |
 | **Sound level** | the VAD (an ONNX pass on every 512-sample window) | RMS threshold with pre-roll and hangover, so it opens before speech starts and closes well after it ends, and never cuts an utterance. |
 
-**The two vision gates are alternatives, not a chain.** `Serval:Ai:Detection:Enabled` chooses;
-off — the default — leaves the motion gate exactly as it was.
+**The two vision gates are alternatives, not a chain, and which one runs is per camera.**
+`Serval:Ai:Detection:Enabled` decides whether a detection model is loaded at all and is the default
+for every camera; each camera then overrides it with `DetectionTuning.Enabled`, where unset — the
+usual state — means "follow the Server". Off leaves that camera on the motion gate exactly as it was.
+
+The two directions are not symmetric, and the asymmetry is worth knowing before you reach for it:
+the server key decides whether a model is opened, so switching a *camera* on under a server switch
+that is off is stored, shown in the App, and inert. To run detection on two cameras out of six, turn
+the server key on and switch the other four off — not the reverse. A camera in that state says so as
+a startup advisory, and the App draws a warning under *Analysis*.
+
+**Object detection and scene descriptions are separate capabilities.** `AiVision` asks for prose;
+`DetectionTuning.Enabled` asks for objects. A camera can do either alone — record what is there and
+never be described, or be described off the motion gate with no detector spending inference on it.
 
 Where a detector *is* loaded, motion does not disappear — it changes job. It stops deciding
 **whether** to look and starts proposing **where**, which is the only use for it that survives having
@@ -596,9 +608,9 @@ the same options instance and writing to it would retune all of them at once.
 | Bag | What a camera overrides | Why it is local |
 |---|---|---|
 | `AudioTuning` | speech gate, VAD threshold, sound gate | How loud the room is. See [the sound gate](#the-sound-gates-threshold-is-per-camera-and-it-matters-more-than-it-looks). |
-| `DetectionTuning` | the three class lists, score and alert thresholds, `MinObjectFraction`, `TrackConfirmSeconds`, `TrackCoastSeconds`, `MaxFps`, `MinMovementFraction`, `AbsenceSeconds`, `NoveltySeconds`, masks | What is in the view, how far away it is, and whether things park in it. `NoveltySeconds` especially: a driveway and a hallway disagree completely about what counts as furniture. |
+| `DetectionTuning` | `Enabled`, the three class lists, score and alert thresholds, `MinObjectFraction`, `TrackConfirmSeconds`, `TrackCoastSeconds`, `MaxFps`, `MinMovementFraction`, `AbsenceSeconds`, `NoveltySeconds`, masks | What is in the view, how far away it is, and whether things park in it. `NoveltySeconds` especially: a driveway and a hallway disagree completely about what counts as furniture. `Enabled` because inference is a shared budget and not every view is worth a share of it — a camera pointed at a private room can be recorded without being looked at, on a server that looks at everything else. |
 | `SoundTuning` | alert and ignored labels, both confidence floors, both cooldowns | Which sounds matter is a property of the room. A drive wants vehicles and glass; a nursery wants crying and the smoke alarm and emphatically not every passing car. |
-| `MotionTuning` | `PixelDelta`, `MinChangedFraction`, `MaxChangedFraction` | Only reached when object detection is off — but that is every deployment without a detection model, where it is the *only* thing deciding whether the description model runs. |
+| `MotionTuning` | `PixelDelta`, `MinChangedFraction`, `MaxChangedFraction` | Only reached when *this camera* is not looking for objects — every deployment without a detection model, and any camera that has switched detection off, where it is the *only* thing deciding whether the description model runs. |
 
 Two rules these all follow. An all-null bag is collapsed to no bag on save, so "this camera is
 tuned" means the same thing in the document, the API and the App. And an empty **list** is refused
@@ -825,7 +837,25 @@ off the `vision` field is simply absent — never fabricated.
 
 Cameras with no edge module can still have AI, run inside the Server on their behalf, using the
 same shared library. It is off by default (`Serval:ServerAi:Enabled`), because enabling it loads
-real models into that process; individual cameras then opt in with `AiVision` / `AiAudio`.
+real models into that process. Individual cameras then choose among three capabilities, and they are
+independent of each other:
+
+| Capability | Per-camera setting | Default |
+|---|---|---|
+| Scene descriptions | `AiVision` | Off. A flat opt-in the camera holds itself. |
+| Object detection | `DetectionTuning.Enabled` | Unset, which follows `Serval:Ai:Detection:Enabled`. |
+| Audio analysis | `AiAudio` | Off. Transcription, speaker labelling and sound tagging together. |
+
+A camera is watched when something it asked for has a model to run on — descriptions pair with the
+vision model, objects with the detector — so a host with the small detector and no 2.3 GB vision
+model still detects, and a camera that only wants prose is not quietly charged for inference.
+
+> **Upgrading.** Detection used to be gated by `AiVision` along with descriptions. It is now
+> inherited, so on a server with `Serval:Ai:Detection:Enabled` on, cameras that had descriptions
+> switched off will **start detecting** — a share of the inference budget, detection records, and
+> object alerts on cameras that have never produced one. That is what "follow the Server" means and
+> there is no migration; the App shows *Look for objects — using the default* on exactly those
+> cameras. To keep the old behaviour, switch *Look for objects* off on them after upgrading.
 
 The two halves have deliberately different shapes, because their inputs do:
 

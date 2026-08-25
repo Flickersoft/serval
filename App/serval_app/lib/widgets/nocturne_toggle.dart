@@ -1,7 +1,9 @@
 import 'package:flutter/widgets.dart';
 import 'package:phosphor_icons/phosphor_icons.dart';
 
+import '../models/server_settings.dart';
 import '../theme/nocturne.dart';
+import 'settings_cards.dart';
 
 /// The 38x22 switch the settings screen uses everywhere a camera has a capability on or off.
 ///
@@ -151,6 +153,13 @@ class ToggleRow extends StatelessWidget {
 ///
 /// The card tints when it is on, which is what makes the three readable as a group at a glance —
 /// you can see which of a camera's senses are awake without reading any of the labels.
+///
+/// **One of the three follows the Server, and says so.** A capability the camera holds itself is a
+/// plain bool with two states; one that overrides a Server-wide switch has a third, *unset*, and a
+/// two-state control cannot show the difference between a camera that chose *on* and one that is
+/// only following. So [source] and [onReset] are optional: given them, the card grows the same chip
+/// and reset link a `SettingCard` has, and [value] is the *effective* value — what the camera is
+/// actually running on. Without them it is the flat switch it was, which is what the other two want.
 class CapabilityCard extends StatelessWidget {
   const CapabilityCard({
     super.key,
@@ -159,13 +168,27 @@ class CapabilityCard extends StatelessWidget {
     required this.description,
     required this.value,
     this.onChanged,
+    this.source,
+    this.resetLabel,
+    this.onReset,
   });
 
   final PhosphorIconData icon;
   final String title;
   final String description;
+
+  /// What the camera is running on — its own choice, or the Server's behind it when [source] is
+  /// [SettingSource.builtIn].
   final bool value;
   final ValueChanged<bool>? onChanged;
+
+  /// Whether this camera set the value itself. Null draws no chip, for a capability with no Server
+  /// switch behind it to inherit from.
+  final SettingSource? source;
+
+  /// *Use the default*, naming what it restores. Drawn only alongside [onReset].
+  final String? resetLabel;
+  final VoidCallback? onReset;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -226,6 +249,25 @@ class CapabilityCard extends StatelessWidget {
             color: Nocturne.mix(Nocturne.text, 60),
           ),
         ),
+
+        // Below the description rather than up beside the switch, which is where the Server page
+        // puts it. Three of these share a row at about 165px each, and the top line has already
+        // spent 53 of that on the glyph and the switch — *using the default* does not fit in what
+        // is left, and moving the switch down to make room would break the alignment across the
+        // three that makes them readable as a group.
+        if (source case final source?) ...[
+          const SizedBox(height: 9),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SettingSourceChip(source: source),
+              if (resetLabel != null && onReset != null)
+                SettingsLinkText(resetLabel!, onTap: onReset!),
+            ],
+          ),
+        ],
       ],
     ),
   );

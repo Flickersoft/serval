@@ -12,18 +12,29 @@ namespace Serval.Server.Tests;
 public class CameraVisionCapabilityTests
 {
     [Theory]
-    // The case that was wrong: the scene-description worker is only registered when a 2.3 GB
+    // The case that was wrong first: the scene-description worker is only registered when a 2.3 GB
     // vision model is on disk, while the detector needs one a couple of hundred times smaller.
     // Requiring the worker meant a host with the detector and no vision model — by far the likelier
     // first deployment — silently never looked at a single frame.
-    [InlineData(true, false, true, true)]
-    [InlineData(true, true, false, true)]
-    [InlineData(true, true, true, true)]
-    [InlineData(true, false, false, false)]
-    [InlineData(false, true, true, false)]
-    public void Either_capability_alone_is_enough_to_watch_a_camera(
-        bool aiVision, bool hasVisionModel, bool hasDetector, bool expected) =>
-        Assert.Equal(expected, CameraAiCoordinator.WantsVision(aiVision, hasVisionModel, hasDetector));
+    [InlineData(true, true, false, true, true)]
+    [InlineData(true, true, true, false, true)]
+    [InlineData(true, true, true, true, true)]
+    [InlineData(true, true, false, false, false)]
+    [InlineData(false, false, true, true, false)]
+
+    // Each capability pairs with its own model, which is the whole of the split. Describing scenes
+    // and looking for objects are asked for separately, so a camera that wants prose and has no
+    // vision model to write it is not watched just because a detector happens to be loaded — the
+    // old rule reached either model from either flag and ran the detector on it.
+    [InlineData(true, false, false, true, false)]
+    [InlineData(false, true, false, true, true)]
+    [InlineData(false, true, true, true, true)]
+    [InlineData(false, true, true, false, false)]
+    public void Each_capability_pairs_with_its_own_model(
+        bool describes, bool detects, bool hasVisionModel, bool hasDetector, bool expected) =>
+        Assert.Equal(
+            expected,
+            CameraAiCoordinator.WantsVision(describes, detects, hasVisionModel, hasDetector));
 
     private static CameraVisionPipeline Pipeline(AiOptions ai, IObjectDetector? detector) =>
         new(
@@ -74,6 +85,53 @@ public class CameraVisionCapabilityTests
     {
         var ai = new AiOptions();
         ai.Detection.Enabled = true;
+
+        using CameraVisionPipeline pipeline = Pipeline(ai, new FakeDetector());
+
+        Assert.True(pipeline.UsesDetection);
+    }
+
+    [Fact]
+    public void A_camera_that_switches_detection_off_keeps_the_motion_gate()
+    {
+        // The server is detecting and a model is loaded; this one camera has opted out. It must
+        // land on frame differencing rather than on nothing, so its scene descriptions carry on.
+        var global = new AiOptions();
+        global.Detection.Enabled = true;
+
+        AiOptions ai = CameraAiOptions.For(
+            global, tuning: null, detection: new CameraDetectionTuning { Enabled = false });
+
+        using CameraVisionPipeline pipeline = Pipeline(ai, new FakeDetector());
+
+        Assert.False(pipeline.UsesDetection);
+        Assert.True(global.Detection.Enabled);
+    }
+
+    [Fact]
+    public void A_camera_that_switches_detection_on_under_a_server_that_did_not_load_one_is_inert()
+    {
+        // The asymmetry worth pinning: the server key decides whether a model is opened at all, so
+        // asking for detection on a camera cannot conjure one. The advisory says so; this proves it.
+        var global = new AiOptions();
+        global.Detection.Enabled = false;
+
+        AiOptions ai = CameraAiOptions.For(
+            global, tuning: null, detection: new CameraDetectionTuning { Enabled = true });
+
+        using CameraVisionPipeline pipeline = Pipeline(ai, detector: null);
+
+        Assert.False(pipeline.UsesDetection);
+    }
+
+    [Fact]
+    public void An_unset_switch_follows_the_server()
+    {
+        var global = new AiOptions();
+        global.Detection.Enabled = true;
+
+        AiOptions ai = CameraAiOptions.For(
+            global, tuning: null, detection: new CameraDetectionTuning { MaxFps = 2 });
 
         using CameraVisionPipeline pipeline = Pipeline(ai, new FakeDetector());
 

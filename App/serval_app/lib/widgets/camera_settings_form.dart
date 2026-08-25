@@ -12,6 +12,7 @@ import '../data/camera_record.dart';
 import '../models/ptz.dart';
 import '../playback/playback_volume.dart';
 import '../models/server_camera_defaults.dart';
+import '../models/server_settings.dart' show SettingSource;
 import '../models/system_stats.dart';
 import '../screens/cameras_screen.dart' show SaveFailureNote;
 import '../theme/nocturne.dart';
@@ -70,7 +71,7 @@ enum CameraSection {
   ),
   analysis(
     'Analysis',
-    'Which of the Server’s two analysers run on this camera. Each one’s own settings are in the '
+    'Which of the Server’s three analysers run on this camera. Each one’s own settings are in the '
         'section named after it.',
   ),
   objects(
@@ -80,7 +81,7 @@ enum CameraSection {
   ),
   motion(
     'Motion detection',
-    'Used when this Server is not looking for objects — it compares each frame to the last '
+    'Used when this camera is not looking for objects — it compares each frame to the last '
         'instead. A camera facing a tree needs a higher setting than one facing a hallway.',
   ),
   speech(
@@ -256,10 +257,12 @@ class CameraSettingsForm extends StatefulWidget {
     CameraSection.analysis: [
       if (before.aiVision != after.aiVision) 'scene descriptions',
       if (before.aiAudio != after.aiAudio) 'audio analysis',
+      if (before.detectionTuning?.enabled != after.detectionTuning?.enabled)
+        'looking for objects',
     ],
     CameraSection.objects: [
-      if (_withoutMasks(before.detectionTuning) !=
-          _withoutMasks(after.detectionTuning))
+      if (_tuningOnly(before.detectionTuning) !=
+          _tuningOnly(after.detectionTuning))
         'what it looks for',
     ],
     CameraSection.motion: [
@@ -292,11 +295,13 @@ class CameraSettingsForm extends StatefulWidget {
   static List<String> changesBetween(CameraRecord before, CameraRecord after) =>
       [for (final named in changesBySection(before, after).values) ...named];
 
-  /// The tuning with its masks taken out, collapsed to null when nothing else is set — so a camera
-  /// whose only override is a mask compares equal to one with no overrides at all.
-  static DetectionTuningSettings? _withoutMasks(DetectionTuningSettings? it) {
+  /// The tuning with the two fields that are edited elsewhere taken out — the masks, on their own
+  /// screen, and the switch, in *Analysis* — collapsed to null when nothing else is set. So a camera
+  /// whose only override is one of those compares equal to one with no overrides at all, and neither
+  /// drawing a polygon nor flipping the switch lights up *Objects & alerts*.
+  static DetectionTuningSettings? _tuningOnly(DetectionTuningSettings? it) {
     if (it == null) return null;
-    final stripped = it.copyWith(masks: null);
+    final stripped = it.copyWith(masks: null, enabled: null);
     return stripped.isEmpty ? null : stripped;
   }
 
@@ -695,7 +700,11 @@ class _CameraSettingsFormState extends State<CameraSettingsForm> {
       'Control profile',
     ],
     CameraSection.masks => const ['Masks'],
-    CameraSection.analysis => const ['Scene descriptions', 'Audio analysis'],
+    CameraSection.analysis => [
+      'Scene descriptions',
+      widget.defaults[CameraSetting.detectionEnabled].label,
+      'Audio analysis',
+    ],
     CameraSection.objects => _labelsFor(_objectFields),
     CameraSection.motion => _labelsFor(_motionFields),
     CameraSection.speech => _labelsFor(_speechFields),
@@ -768,7 +777,21 @@ class _CameraSettingsFormState extends State<CameraSettingsForm> {
       CameraSection.recording => _keepingFootage,
       CameraSection.cameraControl => _reachingTheCamera,
       CameraSection.masks => _masksSection,
-      CameraSection.analysis => _senses,
+      // The one note in this section is about the Server rather than the camera, and it is drawn
+      // whatever this camera says: *Look for objects* on a camera is a choice within a Server that
+      // loaded a detector, and it cannot conjure one that was never opened. Without this, "off
+      // globally, on for the drive" looks like it works and silently does nothing.
+      CameraSection.analysis => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _senses,
+          if (widget.defaults.valueOf(CameraSetting.detectionEnabled) ==
+              false) ...[
+            const SizedBox(height: 12),
+            const TuningNote(_detectionOffOnServer, warning: true),
+          ],
+        ],
+      ),
       CameraSection.objects => _cards(
         cameraDetectionCards(
           tuning: _edited.detectionTuning,
@@ -778,8 +801,13 @@ class _CameraSettingsFormState extends State<CameraSettingsForm> {
               _update((r) => r.copyWith(detectionTuning: _keepMasks(tuning))),
         ),
         paired: paired,
+        // Two notes, not one, because the cards in this section answer to two different switches:
+        // all of them wait on *Look for objects*, and *Describe these objects* additionally waits
+        // on *Scene descriptions*. One note naming a single switch was wrong for whichever half of
+        // the section the reader was actually looking at.
         notes: [
-          if (!_edited.aiVision) const TuningNote(_needsSceneDescriptions),
+          if (!_detectionOn) const TuningNote(_needsObjectDetection),
+          if (!_edited.aiVision) const TuningNote(_describeNeedsDescriptions),
         ],
       ),
       CameraSection.motion => _cards(
@@ -795,6 +823,7 @@ class _CameraSettingsFormState extends State<CameraSettingsForm> {
           if (_edited.motionTuning?.problem case final problem?)
             TuningNote(problem, warning: true),
           if (!_edited.aiVision) const TuningNote(_needsSceneDescriptions),
+          if (_detectionOn) const TuningNote(_replacedByObjects),
         ],
       ),
       CameraSection.speech => _speech,
@@ -847,6 +876,31 @@ class _CameraSettingsFormState extends State<CameraSettingsForm> {
   /// following the sentence rather than guessing which of two toggles it means.
   static const _needsSceneDescriptions =
       'Nothing reads these until “Scene descriptions” is on in Analysis. They are kept either way.';
+
+  /// The object equivalent. Almost every card in *Objects & alerts* answers to this switch rather
+  /// than to *Scene descriptions*, which is what the two used to share and no longer do.
+  static const _needsObjectDetection =
+      'Nothing reads these until “Look for objects” is on in Analysis. They are kept either way.';
+
+  /// The one card in that section that is still about descriptions. Said apart from the note above
+  /// because the two can be true separately: a camera can look for objects and describe none of
+  /// them, which is now a configuration rather than a contradiction.
+  static const _describeNeedsDescriptions =
+      '“Describe these objects” does nothing until “Scene descriptions” is on in Analysis. '
+      'Everything else here still applies.';
+
+  /// Said under *Movement* while the object gate is the one running. The two are alternatives, not
+  /// a chain — see the vision pipeline — so these are stored and unread rather than half-applied.
+  static const _replacedByObjects =
+      'This camera looks for objects, which replaces watching for movement rather than sitting '
+      'behind it. These are kept, and read again if it is turned off.';
+
+  /// The Server half of the same story, and the one warning in *Analysis*. Switching a camera on
+  /// cannot load a model the Server never opened, which is the one thing about these two settings
+  /// that does not read the way it works.
+  static const _detectionOffOnServer =
+      '“Look for objects” is off on the Server, so no detector is loaded and no camera looks for '
+      'objects whatever it is set to here. Turn it on in Server settings first.';
 
   /// The audio equivalent — and it names *Audio analysis* rather than speech, because that one
   /// switch gates the sound recogniser too. It was called “Write down speech” while doing both,
@@ -1423,16 +1477,39 @@ class _CameraSettingsFormState extends State<CameraSettingsForm> {
     );
   }
 
-  /// The two switches the tuning sections are a refinement of, each named after the Server group it
-  /// turns on for this camera.
+  /// What this camera is actually looking for, which is its own answer or the Server's behind it.
+  bool get _detectionOn =>
+      _edited.detectionTuning?.enabled ??
+      widget.defaults.valueOf(CameraSetting.detectionEnabled) == true;
+
+  /// Writes the switch without disturbing the rest of the bag — the thresholds and the masks are
+  /// carried through `copyWith`, so turning detection off never throws away the tuning that would
+  /// be wanted again the moment it came back on.
+  void _setDetection(bool? enabled) => _update((r) {
+    final tuning = (r.detectionTuning ?? const DetectionTuningSettings())
+        .copyWith(enabled: enabled);
+    return r.copyWith(detectionTuning: tuning.isEmpty ? null : tuning);
+  });
+
+  /// The three switches the tuning sections are a refinement of, each named after the Server group
+  /// it turns on for this camera.
   ///
-  /// **The second one was called *Write down speech*, and that was a lie by omission.** `aiAudio`
+  /// **The audio one was called *Write down speech*, and that was a lie by omission.** `aiAudio`
   /// gates the sound recogniser as well as the transcriber — they run on the same audio — so
   /// turning off what read as a transcript setting also stopped glass-break and smoke-alarm
   /// detection, with nothing on screen saying so. *Audio analysis* is what it actually is, and the
   /// description now names both halves.
+  ///
+  /// **The third one is the odd one, and deliberately so.** *Look for objects* overrides a
+  /// Server-wide switch rather than being a fact the camera holds alone, so it draws the chip and
+  /// the reset link every other overridable camera setting draws — its switch is *what this camera
+  /// runs on*, and the chip below says whether the camera chose that or is only following.
   Widget get _senses => LayoutBuilder(
     builder: (context, constraints) {
+      final overridden = _edited.detectionTuning?.enabled != null;
+      final serverDetects =
+          widget.defaults.valueOf(CameraSetting.detectionEnabled) == true;
+
       final tiles = [
         CapabilityCard(
           icon: PhosphorIconsFill.sparkle,
@@ -1440,6 +1517,18 @@ class _CameraSettingsFormState extends State<CameraSettingsForm> {
           description: 'Writes lines like “a silver car pulled in”.',
           value: _edited.aiVision,
           onChanged: (value) => _update((r) => r.copyWith(aiVision: value)),
+        ),
+        CapabilityCard(
+          icon: PhosphorIconsFill.boundingBox,
+          title: widget.defaults[CameraSetting.detectionEnabled].label,
+          description: 'Records what is there, not only that something moved.',
+          value: _detectionOn,
+          onChanged: _setDetection,
+          source: overridden ? SettingSource.user : SettingSource.builtIn,
+          resetLabel: overridden
+              ? 'Use the default · ${serverDetects ? 'on' : 'off'}'
+              : null,
+          onReset: overridden ? () => _setDetection(null) : null,
         ),
         CapabilityCard(
           icon: PhosphorIconsFill.waveform,
@@ -1450,9 +1539,11 @@ class _CameraSettingsFormState extends State<CameraSettingsForm> {
         ),
       ];
 
-      // A card narrower than about 140 reads one word to a line, which is worse than a stack —
-      // so the cards only share a row when there is that much for each of them.
-      if (constraints.maxWidth < 280) {
+      // A card narrower than about 135 reads one word to a line, which is worse than a stack — so
+      // the cards only share a row when there is that much for each of them. Per card rather than
+      // a flat number, because the third one arrived and a flat 280 would have squeezed three into
+      // the width that was measured for two.
+      if (constraints.maxWidth < tiles.length * 135 + (tiles.length - 1) * 10) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

@@ -30,6 +30,7 @@ import '../theme/app_theme.dart';
 import '../theme/nocturne.dart';
 import '../theme/serval_tokens.dart';
 import 'label_chips.dart';
+import 'nocturne_toggle.dart';
 import 'paired_rows.dart';
 import 'settings_cards.dart';
 
@@ -91,6 +92,9 @@ class CameraSettingCard extends StatelessWidget {
     if (fallback case final num number) {
       return 'Use the default · ${settingFigure(number)}';
     }
+    if (fallback case final bool on) {
+      return 'Use the default · ${on ? 'on' : 'off'}';
+    }
     return 'Use the default';
   }
 
@@ -131,6 +135,18 @@ class CameraSettingCard extends StatelessWidget {
   }
 
   Widget get _control {
+    // Drawn exactly as the Server page draws a bool, for the reason the class comment gives about
+    // the rest of this card: a camera setting and a Server setting are the same kind of thing.
+    if (_descriptor.kind == SettingKind.boolean) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: NocturneToggle(
+          value: _effective == true,
+          onChanged: (picked) => onChanged(picked),
+        ),
+      );
+    }
+
     if (_isList) {
       // A list is the one control that must not show the Server's value as its own. Real chips
       // read as "this camera names these", so a camera following the Server draws no chips and

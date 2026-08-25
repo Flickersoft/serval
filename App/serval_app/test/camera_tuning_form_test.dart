@@ -147,6 +147,95 @@ void main() {
         'how it listens for sounds',
       );
     });
+
+    /// The switch lives inside `detectionTuning` on the wire and in *Analysis* on screen, which is
+    /// the same split the masks have — and the same way it would go unsaveable.
+    testWidgets('looking for objects', (tester) async {
+      await expectNamed(
+        tester,
+        subject().copyWith(
+          detectionTuning: const DetectionTuningSettings(enabled: false),
+        ),
+        'looking for objects',
+      );
+    });
+  });
+
+  /// The one that would break the feature silently. Every writer of a detection bag does
+  /// `onChanged(updated.isEmpty ? null : updated)` — the Server collapses an all-null override the
+  /// same way — so a bag holding only `enabled: false` reading as empty would send the camera back
+  /// to following the Server on save, and the switch would spring on again on the next load.
+  group('the switch alone is a real override', () {
+    test('a bag holding only the switch is not empty', () {
+      expect(const DetectionTuningSettings(enabled: false).isEmpty, isFalse);
+      expect(const DetectionTuningSettings(enabled: true).isEmpty, isFalse);
+    });
+
+    test('an untouched bag still is', () {
+      expect(const DetectionTuningSettings().isEmpty, isTrue);
+    });
+
+    test('the switch survives a round trip through JSON', () {
+      final restored = DetectionTuningSettings.fromJson(
+        const DetectionTuningSettings(enabled: false, maxFps: 2).toJson(),
+      );
+
+      expect(restored.enabled, isFalse);
+      expect(restored.maxFps, 2);
+    });
+
+    test('an absent switch reads as following the Server', () {
+      expect(
+        DetectionTuningSettings.fromJson(const {'maxFps': 2}).enabled,
+        isNull,
+      );
+    });
+  });
+
+  group('the object switch is its own section', () {
+    CameraRecord detecting(bool? enabled) => subject().copyWith(
+      detectionTuning: DetectionTuningSettings(enabled: enabled),
+    );
+
+    test(
+      'switching detection off is not also a change to what it looks for',
+      () {
+        final changes = CameraSettingsForm.changesBySection(
+          subject(),
+          detecting(false),
+        );
+
+        expect(
+          changes[CameraSection.analysis],
+          contains('looking for objects'),
+        );
+        expect(changes[CameraSection.objects], isEmpty);
+      },
+    );
+
+    test('a threshold change is not also a change to the switch', () {
+      final changes = CameraSettingsForm.changesBySection(
+        detecting(false),
+        detecting(false).copyWith(
+          detectionTuning: const DetectionTuningSettings(
+            enabled: false,
+            scoreThreshold: 0.4,
+          ),
+        ),
+      );
+
+      expect(changes[CameraSection.objects], contains('what it looks for'));
+      expect(changes[CameraSection.analysis], isEmpty);
+    });
+
+    test('going back to following the Server is a change', () {
+      // The reset link writes null, which is a third state rather than a value — and one that has
+      // to survive `isEmpty` collapsing an otherwise-untouched bag on the way out.
+      expect(
+        CameraSettingsForm.changesBetween(detecting(false), subject()),
+        contains('looking for objects'),
+      );
+    });
   });
 
   group('clearing an override is also a change', () {

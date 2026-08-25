@@ -278,6 +278,83 @@ public class CameraRegistryCheckTests
         Assert.Contains(advisories, a => a.Contains("AiAudio", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Asking_to_look_for_objects_on_a_server_with_no_detector_earns_an_advisory()
+    {
+        // The asymmetry that reads backwards: the server key decides whether a model is opened at
+        // all, so "off globally, on for the drive" looks configured and detects nothing.
+        Camera camera = Valid();
+        camera.DetectionTuning = new CameraDetectionTuning { Enabled = true };
+
+        IReadOnlyList<string> advisories =
+            CameraRegistryCheck.Advisories(camera, ServerAiOn());
+
+        Assert.Contains(
+            advisories,
+            a => a.Contains("Serval:Ai:Detection:Enabled", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Asking_to_look_for_objects_with_the_server_ai_off_earns_an_advisory()
+    {
+        Camera camera = Valid();
+        camera.DetectionTuning = new CameraDetectionTuning { Enabled = true };
+
+        IReadOnlyList<string> advisories =
+            CameraRegistryCheck.Advisories(camera, new ServerOptions());
+
+        Assert.Contains(
+            advisories,
+            a => a.Contains("Serval:ServerAi:Enabled", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Detection_thresholds_kept_on_a_camera_that_is_not_detecting_earn_an_advisory()
+    {
+        // The mirror of the audio trap: tuned against a real view, then switched off, and the next
+        // person reads the numbers as being in force.
+        Camera camera = Valid();
+        camera.DetectionTuning = new CameraDetectionTuning
+        {
+            Enabled = false,
+            ScoreThreshold = 0.6,
+        };
+
+        IReadOnlyList<string> advisories =
+            CameraRegistryCheck.Advisories(camera, DetectionOn());
+
+        Assert.Contains(
+            advisories,
+            a => a.Contains("object-detection thresholds", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The state that must stay quiet. A camera that writes no descriptions and inherits detection
+    /// is a legitimate steady configuration — record what is there, say nothing about it — and these
+    /// are logged at warning level once per startup, so a permanent line about a deliberate setup is
+    /// what teaches people to skip the rest of them.
+    /// </summary>
+    [Fact]
+    public void A_camera_that_detects_without_describing_earns_no_advisory()
+    {
+        Camera camera = Valid();
+        camera.AiVision = false;
+
+        IReadOnlyList<string> advisories =
+            CameraRegistryCheck.Advisories(camera, DetectionOn());
+
+        Assert.DoesNotContain(
+            advisories,
+            a => a.Contains("look for objects", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static ServerOptions DetectionOn()
+    {
+        ServerOptions options = ServerAiOn();
+        options.Ai.Detection.Enabled = true;
+        return options;
+    }
+
     private static ServerOptions ServerAiOn()
     {
         var options = new ServerOptions();

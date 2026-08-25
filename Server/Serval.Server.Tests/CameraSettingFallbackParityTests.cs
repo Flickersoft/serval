@@ -130,6 +130,7 @@ public class CameraSettingFallbackParityTests
         string[] expected =
         [
             // CameraDetectionTuning, less Masks — polygons have no catalogue entry to fall back to.
+            "Serval:Ai:Detection:Enabled",
             "Serval:Ai:Detection:Classes", "Serval:Ai:Detection:DescribeClasses",
             "Serval:Ai:Detection:AlertClasses", "Serval:Ai:Detection:ScoreThreshold",
             "Serval:Ai:Detection:MinObjectFraction", "Serval:Ai:Detection:AlertMinConfidence",

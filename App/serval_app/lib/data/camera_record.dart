@@ -241,6 +241,7 @@ class DetectionMaskSettings {
 /// and a hallway where they never do.
 class DetectionTuningSettings {
   const DetectionTuningSettings({
+    this.enabled,
     this.classes,
     this.describeClasses,
     this.scoreThreshold,
@@ -258,6 +259,7 @@ class DetectionTuningSettings {
 
   factory DetectionTuningSettings.fromJson(Map<String, dynamic> json) =>
       DetectionTuningSettings(
+        enabled: json['enabled'] as bool?,
         classes: _strings(json['classes']),
         describeClasses: _strings(json['describeClasses']),
         scoreThreshold: (json['scoreThreshold'] as num?)?.toDouble(),
@@ -277,6 +279,10 @@ class DetectionTuningSettings {
         absenceSeconds: (json['absenceSeconds'] as num?)?.toDouble(),
         noveltySeconds: (json['noveltySeconds'] as num?)?.toDouble(),
       );
+
+  /// Whether the detector looks at this camera at all. Null follows the Server, which is what makes
+  /// its switch mean "every camera that does not say otherwise".
+  final bool? enabled;
 
   /// Which of the model's classes this camera records at all.
   final List<String>? classes;
@@ -320,7 +326,12 @@ class DetectionTuningSettings {
   /// Regions of the view to ignore. Carried but not edited — see [DetectionMaskSettings].
   final List<DetectionMaskSettings>? masks;
 
+  // The switch counts. A bag holding only `enabled: false` is a real instruction, and collapsing it
+  // to null on the way out — which is what every caller does with an empty one — would send the
+  // camera back to following the Server and make the toggle spring on again on the next load. The
+  // Server's own collapse rule counts it for the same reason.
   bool get isEmpty =>
+      enabled == null &&
       classes == null &&
       describeClasses == null &&
       scoreThreshold == null &&
@@ -336,6 +347,7 @@ class DetectionTuningSettings {
       noveltySeconds == null;
 
   Map<String, dynamic> toJson() => {
+    if (enabled != null) 'enabled': enabled,
     if (classes != null) 'classes': classes,
     if (describeClasses != null) 'describeClasses': describeClasses,
     if (scoreThreshold != null) 'scoreThreshold': scoreThreshold,
@@ -353,6 +365,7 @@ class DetectionTuningSettings {
 
   /// Omit an argument to keep it; pass null to fall back to the Server's default. See [_keep].
   DetectionTuningSettings copyWith({
+    Object? enabled = _keep,
     Object? classes = _keep,
     Object? describeClasses = _keep,
     Object? scoreThreshold = _keep,
@@ -367,6 +380,7 @@ class DetectionTuningSettings {
     Object? absenceSeconds = _keep,
     Object? noveltySeconds = _keep,
   }) => DetectionTuningSettings(
+    enabled: _pick(enabled, this.enabled),
     classes: _pick(classes, this.classes),
     describeClasses: _pick(describeClasses, this.describeClasses),
     scoreThreshold: _pick(scoreThreshold, this.scoreThreshold),
@@ -385,6 +399,7 @@ class DetectionTuningSettings {
   @override
   bool operator ==(Object other) =>
       other is DetectionTuningSettings &&
+      other.enabled == enabled &&
       _sameStrings(other.classes, classes) &&
       _sameStrings(other.describeClasses, describeClasses) &&
       _sameStrings(other.alertClasses, alertClasses) &&
@@ -401,6 +416,7 @@ class DetectionTuningSettings {
 
   @override
   int get hashCode => Object.hash(
+    enabled,
     classes == null ? null : Object.hashAll(classes!),
     describeClasses == null ? null : Object.hashAll(describeClasses!),
     alertClasses == null ? null : Object.hashAll(alertClasses!),
