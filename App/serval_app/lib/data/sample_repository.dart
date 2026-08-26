@@ -364,6 +364,9 @@ class SampleServalRepository implements ServalRepository {
   bool get canSaveMedia => false;
 
   @override
+  bool get streamsMediaToDisk => true;
+
+  @override
   Future<SavedMedia> saveSnapshot(String cameraId) => throw UnsupportedError(
     'The sample repository has no Server to save from.',
   );
@@ -423,6 +426,14 @@ class SampleServalRepository implements ServalRepository {
         ),
     ];
   }
+
+  /// One unbroken span across whatever is asked for, which is what the sample camera "recorded".
+  @override
+  Future<List<CoverageSpan>> coverageFor(
+    String cameraId, {
+    required DateTime from,
+    required DateTime to,
+  }) async => to.isAfter(from) ? [CoverageSpan(from, to)] : const [];
 
   @override
   Future<List<SavedClip>> savedClips({String? query, String? cameraId}) async {
@@ -1206,6 +1217,41 @@ class SampleServalRepository implements ServalRepository {
         min: 1,
         max: 365,
         unit: 'days',
+      ),
+      // The two clip caps, because the trimmer reads them to decide how far a handle may be
+      // dragged. Without them here the sample build silently falls back to kClipMaxFallback and
+      // behaves like a Server that allows half an hour, which is not what any Server ships with.
+      const ServerSetting(
+        key: 'Serval:Media:ClipMaxMinutes',
+        group: 'Recording',
+        label: 'Longest saved clip',
+        help:
+            'How much footage one saved clip may cover. Saved clips are copies that never roll '
+            'off, so this is really a disk limit.',
+        kind: SettingKind.integer,
+        source: SettingSource.builtIn,
+        restartRequired: false,
+        value: 120,
+        defaultValue: 120,
+        min: 1,
+        max: 720,
+        unit: 'minutes',
+      ),
+      const ServerSetting(
+        key: 'Serval:Media:ExportMaxMinutes',
+        group: 'Recording',
+        label: 'Longest export',
+        help:
+            'How much footage one downloaded export may cover. The file is built as it is sent '
+            'and nothing is kept at either end.',
+        kind: SettingKind.integer,
+        source: SettingSource.builtIn,
+        restartRequired: false,
+        value: 720,
+        defaultValue: 720,
+        min: 1,
+        max: 720,
+        unit: 'minutes',
       ),
       // The one advanced entry, so a golden captures the rule that separates the two bands.
       const ServerSetting(

@@ -66,9 +66,21 @@ Two consequences worth knowing:
 - **`InRangeAsync` is half-open.** A segment starting exactly at `to` shares no time with the window,
   and including it made every boundary-snapped clip one segment longer than asked for.
 
-A range crossing an ffmpeg restart is **refused**, not truncated. The streamed export truncates and
-says so in a header, which works when somebody is watching the response; a clip silently half the
-length asked for would be discovered weeks later by the person who needed the other half.
+A range crossing an ffmpeg restart is **joined**, not refused. The segments either side of one have
+different inits and cannot be concatenated directly, so the export hands ffmpeg a concat playlist —
+one named pipe per batch, each entry carrying that batch's exact recorded length so the batches are
+laid end to end instead of each restarting the clock. Nothing is staged: the pipes hold no data, and
+ffmpeg reads them one at a time while the writers wait on a full kernel buffer.
+
+What is still refused is a range the joining cannot cover — a camera that changed codec or
+resolution across a restart, which no single file can hold. The streamed export reports that in a
+header and hands over what it got, which works when somebody is watching the response; a saved clip
+silently half the length asked for would be discovered weeks later by the person who needed the
+other half.
+
+Because batches are lined up by recorded length, the gap while a camera reconnected is closed rather
+than reproduced. The finished file is therefore shorter than its start and end suggest, which is why
+`X-Serval-Clip-Duration` exists alongside `-From` and `-To`.
 
 ## Saving is a job
 
@@ -78,7 +90,7 @@ and far too long for a dialog to look frozen. [`ClipWriteWorker`](../Server/Serv
 does the rest, one clip at a time so a remux never competes with the recorders for the same volume.
 
 Everything a caller can get wrong is refused before the 202: an unknown camera, a backwards range,
-one over `Media:ClipMaxMinutes`, one with no footage, one crossing a restart.
+one over `Media:ClipMaxMinutes`, one with no footage, and one whose batches cannot be joined.
 
 `GET /api/clips/{id}/status` reports `writing` / `ready` / `failed` and the bytes written so far —
 a count rather than a percentage, because there is no total until the file is finished. A `writing`
@@ -130,6 +142,7 @@ element and libmpv are handed a URL and cannot set one.
 | Key | Default | |
 |---|---|---|
 | `Serval:Media:ClipsRoot` | `clips` | Environment-only, like `Media:Root`. Absolute paths allowed. |
-| `Serval:Media:ClipMaxMinutes` | `30` | In the settings catalog. The App renders its own "up to N min" caption from it. |
+| `Serval:Media:ClipMaxMinutes` | `120` | In the settings catalog. A kept copy, so this is a disk limit. The App reads it and caps the trimmer with it. |
+| `Serval:Media:ExportMaxMinutes` | `720` | In the settings catalog. A streamed download that keeps nothing, so it is far the higher of the two. |
 | `Serval:Ai:Vision:ClipPrompt` | see `VisionOptions` | What the summary asks for. |
 | `Serval:Ai:Vision:ClipFrames` | `4` | Clamped by the backend's `MaxFrames` — the RK3588 NPU path takes exactly one. |

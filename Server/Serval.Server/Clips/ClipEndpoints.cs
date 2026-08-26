@@ -59,6 +59,7 @@ public static class ClipEndpoints
             ClipWriteWorker writer,
             CameraRepository cameras,
             RecordingIndex recordings,
+            ClipExporter exporter,
             IOptionsMonitor<ServerOptions> options,
             CancellationToken ct) =>
         {
@@ -81,9 +82,14 @@ public static class ClipEndpoints
             List<RecordingSegment> segments =
                 await recordings.InRangeAsync(request.CameraId, request.From, request.To, ct);
 
-            if (ClipRules.RejectSegments(segments) is { } noFootage)
+            // The plan rather than the raw segments: a range that crosses a recording restart is
+            // joined into one file now, so the only thing left to refuse is a range the joining
+            // cannot cover.
+            ExportPlan plan = await exporter.PlanAsync(camera.Id, segments, ct);
+
+            if (ClipRules.RejectPlan(plan) is { } unusable)
             {
-                return Results.BadRequest(new { error = noFootage });
+                return Results.BadRequest(new { error = unusable });
             }
 
             var clip = new SavedClip
@@ -96,7 +102,7 @@ public static class ClipEndpoints
                 From = request.From,
                 To = request.To,
                 SavedAt = DateTimeOffset.UtcNow,
-                DurationSeconds = (request.To - request.From).TotalSeconds,
+                DurationSeconds = plan.DurationSeconds,
                 State = ClipState.Writing,
                 SearchText = name.ToLowerInvariant(),
             };

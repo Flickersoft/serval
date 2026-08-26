@@ -89,21 +89,38 @@ range. This is the only place a remux happens: storing standalone files instead 
 on *every playback request for every viewer*, whereas exporting a clip is something a person does
 occasionally. By hand, the same thing is `cat init-<stamp>.mp4 seg-<stamp>-*.m4s > out.mp4`.
 
-Only segments sharing one fMP4 `init` can go in a single file, so a range that crosses an ffmpeg
-restart is exported up to that boundary rather than as a file that plays and then breaks. That used
-to be logged and nothing else — the client got a 200 and a clip quietly shorter than it asked for,
-which reads as missing footage rather than as a restart. Three headers now say so, computed before
-a byte of the body is written:
+A segment is undecodable without the `init` it was written with, and an ffmpeg restart writes a new
+one — so a long range is not one pile of segments but several batches. They are joined rather than
+cut short: ffmpeg is given a concat playlist naming one pipe per batch, and each entry carries that
+batch's exact recorded length so the batches land end to end instead of each restarting the clock at
+zero. The lengths come from the segment index, which knows them, and are stated in full precision —
+a rounded batch drags every later one out of step, and the resulting file is wrong while ffmpeg
+still exits zero.
+
+The pipes are named pipes under `Ingest:ExportPipeDir` (tmpfs), and they hold nothing: ffmpeg reads
+them one at a time while the other writers wait on a full kernel buffer, so a twelve-hour export
+across fifty restarts costs about 3 MB of kernel buffer and no heap at all.
+
+MPEG-TS would be the obvious intermediate and was measured and rejected: its muxer silently writes
+`vp9` and `av1` as private data and exits zero, producing an export with no video, and two of the
+four codecs in `Ingest:VideoPassthroughCodecs` are exactly those.
+
+What cannot be joined is a camera that changed codec or resolution across a restart. The export
+stops there, which used to be logged and nothing else — the client got a 200 and a clip quietly
+shorter than it asked for, reading as missing footage rather than as a restart. Headers now say so,
+computed before a byte of the body is written:
 
 ```
 Content-Disposition:      attachment; filename="front-door-20260802-140530.mp4"
 X-Serval-Clip-From:       what the file actually starts at
 X-Serval-Clip-To:         and ends at
-X-Serval-Clip-Truncated:  true when the range was cut at a session boundary
+X-Serval-Clip-Duration:   how long it plays, which is less when the range spans an outage
+X-Serval-Clip-Sessions:   how many recording sessions were joined
+X-Serval-Clip-Truncated:  true when footage in the range could not be joined to the rest
 ```
 
 A browser can read none of those without the CORS policy naming them in `WithExposedHeaders` —
-`AllowAnyHeader` governs the *request* — so the policy lists all four. Without it the web build
+`AllowAnyHeader` governs the *request* — so the policy lists every one. Without it the web build
 cannot even see the filename it is meant to save under, and only on web.
 
 One failure this cannot make honest: if ffmpeg dies mid-pipe the client already holds a 200 and a

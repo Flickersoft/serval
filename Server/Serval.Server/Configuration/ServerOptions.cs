@@ -177,7 +177,17 @@ public sealed class MediaOptions
     public double RetentionSweepMinutes { get; set; } = 30.0;
 
     /// <summary>Longest range a single saved clip may cover. The App renders its caption from this.</summary>
-    public int ClipMaxMinutes { get; set; } = 30;
+    public int ClipMaxMinutes { get; set; } = 120;
+
+    /// <summary>
+    /// Longest range a single streamed export may cover.
+    ///
+    /// Far more generous than <see cref="ClipMaxMinutes"/> because the two cost different things.
+    /// A saved clip is a file that never rolls off, so its ceiling is disk. An export is remuxed
+    /// straight down the response and keeps nothing at either end, so its ceiling is only how long
+    /// somebody is willing to wait for a download.
+    /// </summary>
+    public int ExportMaxMinutes { get; set; } = 720;
 
     /// <summary>
     /// Where alert preview clips and their posters live, as a sibling of the per-camera
@@ -297,6 +307,17 @@ public sealed class IngestOptions
     /// makes staging on tmpfs safe, since ffmpeg writes files and never blocks on a slow consumer.
     /// </summary>
     public int DetectFrameBacklog { get; set; } = 8;
+
+    /// <summary>
+    /// Where an export in flight puts its named pipes. <b>Should be tmpfs</b>, alongside
+    /// <see cref="DetectFrameDir"/> and for the same reason — though far more cheaply, since these
+    /// hold no data at all. A pipe is a name the kernel hands bytes through; an export that joins
+    /// fifty recording sessions creates fifty entries totalling zero bytes on disk.
+    ///
+    /// Absolute, for the working-directory reason <see cref="DetectFrameDir"/> is, and outside the
+    /// media root so the retention sweep and the disk scanner never see it.
+    /// </summary>
+    public string ExportPipeDir { get; set; } = "/dev/shm/serval/export";
 
     /// <summary>
     /// Seconds of the detect stream kept on disk as a rolling ring, so an alert's preview clip can

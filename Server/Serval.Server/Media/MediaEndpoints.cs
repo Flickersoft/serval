@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Options;
 using Serval.Server.Cameras;
 using Serval.Server.Configuration;
@@ -115,11 +116,21 @@ public static class MediaEndpoints
         group.MapGet("/clip.mp4",
             async (string id, DateTimeOffset from, DateTimeOffset to,
                    RecordingIndex recordings, ClipExporter exporter,
+                   IOptionsMonitor<ServerOptions> options,
                    HttpContext context, CancellationToken ct) =>
         {
             if (!CameraRepository.IsSafeId(id))
             {
                 return Results.NotFound();
+            }
+
+            // Enforced here and not only in the App, which is where this limit used to live in its
+            // entirety. The route takes a token and two timestamps, so without this an unbounded
+            // range is an unbounded remux that nothing on the Server would refuse.
+            if (ExportRules.RejectExport(from, to, options.CurrentValue.Media.ExportMaxMinutes)
+                is { } refusal)
+            {
+                return Results.BadRequest(new { error = refusal });
             }
 
             List<RecordingSegment> segments = await recordings.InRangeAsync(id, from, to, ct);
@@ -128,30 +139,38 @@ public static class MediaEndpoints
                 return Results.NotFound();
             }
 
-            // What the file will actually contain, worked out before a byte is written — the
-            // export stops at a session boundary, and headers cannot be set once the body is
-            // streaming. Without this the client is handed a 200 and a clip quietly shorter than
-            // the window it asked for, which looks like missing footage rather than a restart.
-            IReadOnlyList<RecordingSegment> run = ClipExporter.LeadingRun(segments);
-            RecordingSegment last = run[^1];
+            // What the file will actually contain, worked out before a byte is written, because
+            // headers cannot be set once the body is streaming. A range crossing a recording
+            // restart is joined rather than cut short, but the join can still fall through when a
+            // camera changed codec partway, and the client is owed the difference between "that is
+            // all there was" and "that is all we could give you".
+            ExportPlan plan = await exporter.PlanAsync(id, segments, ct);
+            if (plan.IsEmpty)
+            {
+                return Results.NotFound();
+            }
 
             context.Response.Headers.ContentDisposition =
                 $"attachment; filename=\"{id}-{from:yyyyMMdd-HHmmss}.mp4\"";
-            context.Response.Headers["X-Serval-Clip-From"] = run[0].StartedAt.ToString("O");
-            context.Response.Headers["X-Serval-Clip-To"] =
-                last.StartedAt.AddSeconds(last.DurationSeconds).ToString("O");
-            context.Response.Headers["X-Serval-Clip-Truncated"] =
-                run.Count < segments.Count ? "true" : "false";
+            context.Response.Headers["X-Serval-Clip-From"] = plan.From.ToString("O");
+            context.Response.Headers["X-Serval-Clip-To"] = plan.To.ToString("O");
+            context.Response.Headers["X-Serval-Clip-Truncated"] = plan.Truncated ? "true" : "false";
+            context.Response.Headers["X-Serval-Clip-Sessions"] =
+                plan.SessionCount.ToString(CultureInfo.InvariantCulture);
+            context.Response.Headers["X-Serval-Clip-Duration"] =
+                plan.DurationSeconds.ToString("0.###", CultureInfo.InvariantCulture);
 
-            await exporter.WriteAsync(id, segments, context.Response.Body, ct);
+            await exporter.WriteAsync(id, plan, context.Response.Body, ct);
             return Results.Empty;
         })
             .WithSummary("A standalone MP4 of a time range.")
             .WithDescription(
-                "Carries X-Serval-Clip-From / -To (what the file actually covers) and "
-                + "X-Serval-Clip-Truncated, set when the range crossed an ffmpeg session restart "
-                + "and the export stopped at that boundary. Browsers can only read those through "
-                + "the CORS policy's exposed headers.")
+                "Carries X-Serval-Clip-From / -To (what the file actually covers), "
+                + "X-Serval-Clip-Duration (how long it plays, which is less than From to To when "
+                + "the range spans an outage), X-Serval-Clip-Sessions (how many recording sessions "
+                + "were joined) and X-Serval-Clip-Truncated, set when footage inside the range had "
+                + "to be left out because the stream changed across a restart. Browsers can only "
+                + "read those through the CORS policy's exposed headers.")
             .RequireAuthorization();
 
         // The raw index of recorded segments in a window — for a timeline/scrubber UI.

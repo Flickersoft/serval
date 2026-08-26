@@ -196,9 +196,16 @@ public static class SettingsCatalog
 
         new("Serval:Media:ClipMaxMinutes", GroupRecording, "Longest saved clip",
             "How much footage one saved clip may cover. Saved clips are copies that never roll off, "
-            + "so this is really a disk limit — half an hour of a 2K camera is a couple of gigabytes, "
+            + "so this is really a disk limit — two hours of a 2K camera runs to several gigabytes, "
             + "kept until somebody deletes it. The clip screen shows whatever this says.",
-            SettingKind.Int, Min: 1, Max: 240, Unit: "minutes"),
+            SettingKind.Int, Min: 1, Max: 720, Unit: "minutes"),
+
+        new("Serval:Media:ExportMaxMinutes", GroupRecording, "Longest export",
+            "How much footage one downloaded export may cover. Unlike a saved clip this is not a "
+            + "disk limit: the file is built as it is sent and nothing is kept at either end, so "
+            + "the only real cost is how long the download takes. A range that crosses a recording "
+            + "restart is joined into one file automatically.",
+            SettingKind.Int, Min: 1, Max: 720, Unit: "minutes"),
 
         // ---- Alerts --------------------------------------------------------------------------
         new("Serval:Media:AlertRetentionDays", GroupAlerts, "Keep alerts for",

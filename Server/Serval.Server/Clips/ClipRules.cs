@@ -63,24 +63,34 @@ public static class ClipRules
     /// <summary>
     /// Why this range cannot become a clip, given what is actually on disk for it, or null if it can.
     ///
-    /// Separate from <see cref="RejectSave"/> because it needs the segment index, and because these
-    /// two failures are about the footage rather than about the request: nothing the caller types
-    /// differently fixes them, only a different range does.
+    /// Separate from <see cref="RejectSave"/> because it needs the segment index, and because this
+    /// failure is about the footage rather than about the request: nothing the caller types
+    /// differently fixes it, only a different range does.
     /// </summary>
-    public static string? RejectSegments(IReadOnlyList<RecordingSegment> segments)
+    public static string? RejectSegments(IReadOnlyList<RecordingSegment> segments) =>
+        segments.Count == 0 ? "Nothing was recorded in that range." : null;
+
+    /// <summary>
+    /// Why the export this range would produce cannot be kept as one clip, or null if it can.
+    ///
+    /// A recording restart on its own is no longer a refusal — the batches either side of one are
+    /// joined into a single file. What is still refused is a range the joining cannot cover: a
+    /// camera that changed codec or resolution partway leaves footage that no single file can hold,
+    /// and a saved clip that plays and then stops is worse than one that was never made. A download
+    /// takes the same range and simply reports how much of it arrived, because there the person is
+    /// watching it happen and can ask again.
+    /// </summary>
+    public static string? RejectPlan(ExportPlan plan)
     {
-        if (segments.Count == 0)
+        if (plan.IsEmpty)
         {
             return "Nothing was recorded in that range.";
         }
 
-        // A run of segments sharing one fMP4 init is the most that can go in one playable file.
-        // Refused here rather than discovered halfway through writing it, because a clip that plays
-        // and then stops is worse than one that was never made.
-        if (ClipExporter.LeadingRun(segments).Count < segments.Count)
+        if (plan.Truncated)
         {
-            return "Recording restarted partway through that range, so it cannot be saved as one clip. "
-                + "Choose a range on one side of the gap.";
+            return "The camera's stream changed partway through that range, so it cannot be saved "
+                + "as one clip. Choose a range on one side of the change.";
         }
 
         return null;

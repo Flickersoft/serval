@@ -11,6 +11,9 @@ MediaSaver makeMediaSaver() => const _NativeMediaSaver();
 /// Streamed to disk rather than buffered, so a long clip never sits in memory whole — the Server
 /// pipes it out of ffmpeg with no `Content-Length`, and a minute of 4K is not small.
 class _NativeMediaSaver implements MediaSaver {
+  /// Always. `path_provider` gives a real directory and the chunks go into a `FileSink`.
+  @override
+  bool get streamsToDisk => true;
   const _NativeMediaSaver();
 
   @override

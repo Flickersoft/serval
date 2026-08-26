@@ -1,28 +1,98 @@
 import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
+import 'package:file_saver/file_saver.dart';
 import 'package:web/web.dart' as web;
 
 import 'media_saver.dart';
 
 MediaSaver makeMediaSaver() => const _WebMediaSaver();
 
-/// Browser: collect the bytes, wrap them in a `Blob`, and click a synthetic anchor at an object
-/// URL.
+/// Browser: stream the bytes to a file the user picked, or fall back to building a `Blob`.
 ///
-/// An anchor pointed straight at the Server would be simpler and does not work: the `download`
-/// attribute is **ignored cross-origin**, and the App and the Server are always different origins
-/// — that is what `Serval:Cors` exists for. Without the blob the browser would navigate to the
-/// MP4 and play it in a tab under a name of its own choosing.
+/// Two paths, because browsers are two kinds of browser here.
 ///
-/// No byte count here. `package:http`'s browser client buffers the whole body before yielding it,
-/// so there is nothing to report progress from until it is all present — which is why the caller's
-/// label says "Exporting…" rather than a figure on this platform.
+/// Where the File System Access API exists — Chrome and Edge — `saveAsStream` asks for a
+/// destination up front and writes each chunk to it as it arrives. Nothing accumulates, which is
+/// the only way a twelve-hour export is survivable: the fallback below holds the finished file
+/// three times over at its peak (the growing list, the `Uint8List` copied from it, and the `Blob`
+/// copied from that), and a browser tab dies without an error message.
+///
+/// Where it does not — Firefox and Safari — the `Blob` is still the only way to hand a file over,
+/// so it stays. What changes is that the caller knows: [streamsToDisk] is false there and the
+/// export is capped to something a tab can hold, rather than being attempted and killing it.
+///
+/// An anchor pointed straight at the Server would avoid all of this and does not work: the
+/// `download` attribute is **ignored cross-origin**, and the App and the Server are always
+/// different origins — that is what `Serval:Cors` exists for. Without the blob the browser would
+/// navigate to the MP4 and play it in a tab under a name of its own choosing.
 class _WebMediaSaver implements MediaSaver {
   const _WebMediaSaver();
 
   @override
+  bool get streamsToDisk =>
+      globalContext.hasProperty('showSaveFilePicker'.toJS).toDart;
+
+  @override
   Future<SavedMedia> save({
+    required String fileName,
+    required String mimeType,
+    required Stream<List<int>> stream,
+    void Function(int bytes)? onBytes,
+  }) async {
+    if (streamsToDisk) {
+      return _streamToDisk(
+        fileName: fileName,
+        mimeType: mimeType,
+        stream: stream,
+        onBytes: onBytes,
+      );
+    }
+
+    return _collectIntoBlob(
+      fileName: fileName,
+      mimeType: mimeType,
+      stream: stream,
+      onBytes: onBytes,
+    );
+  }
+
+  /// Chrome and Edge: chunks go straight to the file the user chose.
+  ///
+  /// The byte count is threaded through the stream rather than reported by the package, which
+  /// returns only a path at the end — and a count is the whole reason this platform can show
+  /// progress at all now, having had nothing to report while it was buffering.
+  Future<SavedMedia> _streamToDisk({
+    required String fileName,
+    required String mimeType,
+    required Stream<List<int>> stream,
+    void Function(int bytes)? onBytes,
+  }) async {
+    var written = 0;
+
+    final counted = stream.map((chunk) {
+      written += chunk.length;
+      onBytes?.call(written);
+      return chunk;
+    });
+
+    await FileSaver.instance.saveAsStream(
+      name: fileName,
+      stream: counted,
+      // The name already carries its extension: it comes from the Server's own
+      // Content-Disposition, which is the name the person should see in their downloads.
+      includeExtension: false,
+      mimeType: MimeType.custom,
+      customMimeType: mimeType,
+    );
+
+    // The browser chose the directory and will not say which, so there is no location to report.
+    return SavedMedia(fileName: fileName, bytes: written);
+  }
+
+  /// Firefox and Safari: the whole file in memory, then an object URL.
+  Future<SavedMedia> _collectIntoBlob({
     required String fileName,
     required String mimeType,
     required Stream<List<int>> stream,
@@ -53,7 +123,6 @@ class _WebMediaSaver implements MediaSaver {
       web.URL.revokeObjectURL(url);
     }
 
-    // The browser chose the directory and will not say which, so there is no location to report.
     return SavedMedia(fileName: fileName, bytes: bytes.length);
   }
 }

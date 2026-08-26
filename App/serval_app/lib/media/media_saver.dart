@@ -29,6 +29,14 @@ class SavedMedia {
 /// conditional import above — the same shape `lib/playback/` uses for its two players, and for
 /// the same reason: `path_provider` has no web implementation and a `Blob` has no native one.
 abstract interface class MediaSaver {
+  /// Whether this platform writes the stream straight to disk as it arrives.
+  ///
+  /// True everywhere except a browser without the File System Access API — Firefox and Safari
+  /// today — where the only way to hand over a file is to build the whole thing in memory first.
+  /// That is survivable for a minute of footage and not for twelve hours, so it is the one place a
+  /// long export has to be refused rather than attempted.
+  bool get streamsToDisk;
+
   /// [stream] is consumed once. [onBytes] ticks as it arrives, where the platform can tell.
   Future<SavedMedia> save({
     required String fileName,
