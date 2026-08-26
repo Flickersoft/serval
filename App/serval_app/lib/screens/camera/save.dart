@@ -1,22 +1,58 @@
 part of '../camera_screen.dart';
 
 class _ClipMode {
-  const _ClipMode({required this.selection, required this.zoom});
+  const _ClipMode({
+    required this.selection,
+    required this.zoom,
+    required this.window,
+  });
+
+  /// Opens with the window centred on the range, which is the one moment centring is right.
+  factory _ClipMode.opening({required ClipSelection selection}) {
+    final zoom = TrimZoom.forSpan(selection.span);
+
+    return _ClipMode(
+      selection: selection,
+      zoom: zoom,
+      window: zoom.windowFor(selection.from, selection.to),
+    );
+  }
 
   final ClipSelection selection;
   final TrimZoom zoom;
 
-  _ClipMode copyWith({ClipSelection? selection, TrimZoom? zoom}) => _ClipMode(
+  /// The slice of time the track draws.
+  ///
+  /// Held as state rather than recomputed from the selection, and that is the whole point. A window
+  /// centred on the range moves *both* ends on screen whenever either one is dragged — grab the end
+  /// handle, the centre shifts by half of what you moved, and the start handle slides the other way
+  /// under a finger that never touched it. So the window stays where it is and only pans when a
+  /// handle actually reaches its edge.
+  final CoverageSpan window;
+
+  _ClipMode copyWith({
+    ClipSelection? selection,
+    TrimZoom? zoom,
+    CoverageSpan? window,
+  }) => _ClipMode(
     selection: selection ?? this.selection,
     zoom: zoom ?? this.zoom,
+    window: window ?? this.window,
   );
 
-  /// The slice of time the track draws, held inside the session being trimmed.
-  CoverageSpan get window => zoom.windowFor(
-    selection.from,
-    selection.to,
-    earliest: selection.segments.firstOrNull?.from,
-    latest: selection.segments.lastOrNull?.to,
+  /// The window shifted only as far as it must to keep [at] on the track.
+  CoverageSpan windowKeeping(DateTime at) => window.duration == zoom.span
+      ? zoom.windowKeeping(window, at)
+      // A window of the wrong width can only mean the zoom changed without the track following.
+      : zoom.windowFor(selection.from, selection.to);
+
+  /// The same trim at a different zoom, with the track resized to match.
+  ///
+  /// Both halves matter: changing [zoom] alone leaves [window] at its old width and the track does
+  /// not move, which is the *Wider* control appearing to do nothing.
+  _ClipMode zoomedTo(TrimZoom next) => copyWith(
+    zoom: next,
+    window: next.windowFor(selection.from, selection.to),
   );
 }
 

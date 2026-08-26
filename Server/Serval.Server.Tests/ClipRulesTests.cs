@@ -1,6 +1,7 @@
 using MongoDB.Bson;
 using Serval.Server.Auth;
 using Serval.Server.Clips;
+using Serval.Server.Media;
 using Serval.Server.Recordings;
 
 namespace Serval.Server.Tests;
@@ -24,6 +25,24 @@ public class ClipRulesTests
         StartedAt = Noon.AddSeconds(index * 4),
         DurationSeconds = 4,
     };
+
+    /// <summary>An export plan over these batches, as <c>ClipExporter.PlanAsync</c> would build it.</summary>
+    private static ExportPlan Plan(params IReadOnlyList<RecordingSegment>[] batches)
+    {
+        if (batches.Length == 0)
+        {
+            return new ExportPlan([], Truncated: false, default, default, 0);
+        }
+
+        RecordingSegment last = batches[^1][^1];
+
+        return new ExportPlan(
+            batches,
+            Truncated: false,
+            batches[0][0].StartedAt,
+            last.StartedAt.AddSeconds(last.DurationSeconds),
+            batches.Sum(b => b.Sum(s => s.DurationSeconds)));
+    }
 
     private static SavedClip Clip(string savedBy = "jeremiah") => new()
     {
@@ -109,16 +128,34 @@ public class ClipRulesTests
     }
 
     [Fact]
-    public void A_range_crossing_a_recording_restart_is_refused_rather_than_truncated()
+    public void A_range_crossing_a_recording_restart_is_joined_rather_than_refused()
     {
-        // The streaming export truncates at the boundary and says so in a header. A saved clip
-        // cannot: nobody is watching the response, and a clip silently half the length asked for
-        // would be discovered weeks later by the person who needed the other half.
-        string? refusal = ClipRules.RejectSegments(
-            [Segment("init-a.mp4", 0), Segment("init-a.mp4", 1), Segment("init-b.mp4", 2)]);
+        // This used to be a refusal, and the reason it is not any more is the whole point of the
+        // joining work: a restart is something the recorder did, not something the person asking
+        // for the footage did, and half an hour either side of one is still half an hour.
+        Assert.Null(ClipRules.RejectPlan(Plan(
+            [Segment("init-a.mp4", 0), Segment("init-a.mp4", 1)],
+            [Segment("init-b.mp4", 2)])));
+    }
+
+    [Fact]
+    public void A_range_the_join_cannot_cover_is_still_refused()
+    {
+        // A camera that changed codec or resolution across a restart leaves two batches no single
+        // file can hold. The streaming export says so in a header and hands over what it got; a
+        // saved clip cannot, because nobody is watching it happen, and a clip silently half the
+        // length asked for would be discovered weeks later by the person who needed the other half.
+        string? refusal = ClipRules.RejectPlan(
+            Plan([Segment("init-a.mp4", 0)]) with { Truncated = true });
 
         Assert.NotNull(refusal);
-        Assert.Contains("restarted", refusal);
+        Assert.Contains("changed", refusal);
+    }
+
+    [Fact]
+    public void A_plan_with_no_footage_is_refused()
+    {
+        Assert.NotNull(ClipRules.RejectPlan(Plan()));
     }
 
     [Fact]

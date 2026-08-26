@@ -121,8 +121,8 @@ public sealed class ClipWriteWorker : BackgroundService
         List<RecordingSegment> segments =
             await _recordings.InRangeAsync(clip.CameraId, clip.From, clip.To, cancellationToken);
 
-        IReadOnlyList<RecordingSegment> run = ClipExporter.LeadingRun(segments);
-        if (run.Count == 0)
+        ExportPlan plan = await _exporter.PlanAsync(clip.CameraId, segments, cancellationToken);
+        if (plan.IsEmpty)
         {
             // The endpoint checked this, but retention runs on its own schedule and the segments
             // could have been pruned between accepting the clip and reaching it in the queue.
@@ -133,9 +133,9 @@ public sealed class ClipWriteWorker : BackgroundService
         _storage.EnsureRoot();
 
         string video = _storage.VideoFor(id);
-        await _exporter.WriteFileAsync(clip.CameraId, run, video, cancellationToken);
+        await _exporter.WriteFileAsync(clip.CameraId, plan, video, cancellationToken);
 
-        double duration = (clip.To - clip.From).TotalSeconds;
+        double duration = plan.DurationSeconds;
         duration = await _media.TryReadDurationAsync(video, cancellationToken) ?? duration;
 
         // The middle rather than the first frame: a clip opens on whatever was happening a moment
@@ -154,8 +154,8 @@ public sealed class ClipWriteWorker : BackgroundService
             cancellationToken);
 
         _logger.LogInformation(
-            "Saved clip {ClipId} for camera {CameraId}: {Seconds:0.#}s from {Segments} segments.",
-            id, clip.CameraId, duration, run.Count);
+            "Saved clip {ClipId} for camera {CameraId}: {Seconds:0.#}s from {Segments} segments across {Sessions} recording sessions.",
+            id, clip.CameraId, duration, plan.Segments.Count(), plan.SessionCount);
 
         _summaries.Enqueue(id);
     }

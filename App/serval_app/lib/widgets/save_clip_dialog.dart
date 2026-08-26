@@ -46,6 +46,7 @@ class SaveClipDialog extends StatefulWidget {
     this.suggestedName = '',
     this.poster,
     this.canShare = false,
+    this.keepLimit,
     this.compact = false,
   });
 
@@ -69,6 +70,14 @@ class SaveClipDialog extends StatefulWidget {
 
   final bool canShare;
 
+  /// Set when the range is longer than a saved clip may be, carrying that limit for the wording.
+  ///
+  /// A download has a far higher ceiling than a kept copy, and the range is dragged out before
+  /// anybody says which they wanted — so a long one arrives here perfectly valid for one
+  /// destination and not the other. Disabling the option and saying why beats accepting the choice
+  /// and failing afterwards, when the trimming is already done.
+  final Duration? keepLimit;
+
   /// 12d: the same two decisions as a sheet rather than a dialog, for the reason the filter is one.
   final bool compact;
 
@@ -81,6 +90,43 @@ class _SaveClipDialogState extends State<SaveClipDialog> {
     text: widget.suggestedName,
   );
   ClipDestination _destination = ClipDestination.library;
+
+  /// What the line under the destinations says.
+  ///
+  /// Normally the one thing about a saved clip worth knowing. When the range is too long to be one,
+  /// that instead — and phrased as what *is* possible, because the alternative is right there and
+  /// already selected.
+  String get _keepNote {
+    if (widget.keepLimit case final limit?) {
+      final allowed = limit.inMinutes >= 60
+          ? '${(limit.inMinutes / 60).toStringAsFixed(limit.inMinutes % 60 == 0 ? 0 : 1)} hours'
+          : '${limit.inMinutes} minutes';
+
+      return 'This range is longer than the $allowed a saved clip can cover, so it can only be '
+          'downloaded. Downloads are built as they are sent and nothing is kept on the Server.';
+    }
+
+    return 'Saved clips are kept until you delete them — unlike the rest of the footage, which '
+        'rolls off.';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Never open on a destination that cannot be used. Download is the fallback because it is the
+    // one with the higher ceiling — it is streamed and keeps nothing, so a range too long to keep
+    // is very often still fine to download.
+    if (!_canKeep) _destination = ClipDestination.download;
+  }
+
+  /// Whether this range can be kept on the Server at all.
+  ///
+  /// Governs *Saved clips* and *Share* together, because they are the same request: sharing a range
+  /// keeps it first — there is no file to share otherwise — so both go through the clip cap and
+  /// both fail on a range over it. Gating only the library was how a long range came to preselect
+  /// Share and then fail at the end with "a clip can be at most N minutes long".
+  bool get _canKeep => widget.keepLimit == null;
 
   @override
   void dispose() {
@@ -324,12 +370,16 @@ class _SaveClipDialogState extends State<SaveClipDialog> {
             ClipDestination.library,
             'Saved clips',
             PhosphorIconsRegular.folderSimple,
+            enabled: _canKeep,
           ),
 
           // Share where the platform has a sheet, download where it does not. Not both: a phone
           // saving to its camera roll and a desktop saving to Downloads are the same intention,
           // and offering two words for it on one screen is what makes people hesitate.
-          if (widget.canShare)
+          // Share is only offered while keeping is possible, because sharing keeps the clip
+          // first — there is no file to share otherwise. Over the cap it is replaced by Download
+          // rather than shown dead, or the dialog would offer nothing that works.
+          if (widget.canShare && _canKeep)
             _destinationButton(
               ClipDestination.share,
               widget.compact ? 'Share…' : 'Share',
@@ -344,8 +394,7 @@ class _SaveClipDialogState extends State<SaveClipDialog> {
         ],
       ),
       Text(
-        'Saved clips are kept until you delete them — unlike the rest of the footage, which rolls '
-        'off.',
+        _keepNote,
         style: TextStyle(
           fontSize: widget.compact ? 12 : 11.5,
           height: 1.45,
@@ -358,12 +407,14 @@ class _SaveClipDialogState extends State<SaveClipDialog> {
   Widget _destinationButton(
     ClipDestination destination,
     String label,
-    PhosphorIconData icon,
-  ) {
+    PhosphorIconData icon, {
+    bool enabled = true,
+  }) {
     final chosen = _destination == destination;
+    final muted = Nocturne.mix(Nocturne.text, enabled ? 75 : 32);
 
     final button = GestureDetector(
-      onTap: () => setState(() => _destination = destination),
+      onTap: enabled ? () => setState(() => _destination = destination) : null,
       child: Container(
         height: widget.compact ? 46 : 36,
         padding: EdgeInsets.symmetric(horizontal: widget.compact ? 0 : 13),
@@ -384,15 +435,13 @@ class _SaveClipDialogState extends State<SaveClipDialog> {
             Icon(
               icon,
               size: widget.compact ? 16 : 15,
-              color: chosen
-                  ? Nocturne.accent300
-                  : Nocturne.mix(Nocturne.text, 75),
+              color: chosen ? Nocturne.accent300 : muted,
             ),
             Text(
               label,
               style: TextStyle(
                 fontSize: widget.compact ? 14 : 13,
-                color: chosen ? Nocturne.text : Nocturne.mix(Nocturne.text, 75),
+                color: chosen ? Nocturne.text : muted,
               ),
             ),
           ],

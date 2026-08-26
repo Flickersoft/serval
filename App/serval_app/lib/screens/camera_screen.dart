@@ -240,6 +240,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     // the first window is already lifted, rather than the first fifteen minutes of a quiet camera
     // playing at the recording's own level.
     _applyStoredVolume();
+    unawaited(_readClipLimits());
     _volume.addListener(_applyStoredVolume);
 
     // Arrived from a row in the feed. The coverage it has to be seeked within is fetched behind
@@ -636,23 +637,47 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     final anchor = replaying ? _replay.playhead.value : DateTime.now();
     if (anchor == null) return;
 
-    // The trimmer works in segments, so it needs the unmerged index rather than the coverage the
-    // scrubber draws. Asked for around the anchor and no wider: an hour of a four-second camera is
-    // 900 rows, which is affordable, and a day is not.
-    final segments = await _repository.segmentsFor(
-      widget.camera.id,
-      from: anchor.subtract(const Duration(minutes: 45)),
-      to: anchor.add(const Duration(minutes: 45)),
-    );
+    // The caps are settled before the trimmer opens, not while it is open. They arrive from the
+    // Server, and reading them in the background meant the cap in force depended on whether the
+    // fetch had landed yet — press Save clip quickly and the trimmer allowed half an hour, press it
+    // a moment later and it allowed twelve. Same build, different answer, which is the worst kind.
+    await _readClipLimits();
+    if (!mounted) return;
+
+    // Two different questions, asked at two different costs.
+    //
+    // Coverage says what could be exported and is one span per recording session — one to three
+    // rows for a whole day — so it is asked for across the entire range a clip may cover. Segments
+    // say where a handle snaps, are one row per four seconds, and are only needed near the handles.
+    // Asking for segments across the whole range instead was what forced a narrow window, and the
+    // narrow window was the wall a long drag kept hitting.
+    final results = await Future.wait([
+      _repository.coverageFor(
+        widget.camera.id,
+        from: anchor.subtract(_trimMax),
+        to: anchor.add(_trimMax),
+      ),
+      _repository.segmentsFor(
+        widget.camera.id,
+        from: anchor.subtract(_clipSnapWindow),
+        to: anchor.add(_clipSnapWindow),
+      ),
+    ]);
+
+    if (!mounted) return;
+
+    final coverage = results[0] as List<CoverageSpan>;
+    final segments = results[1] as List<RecordedSegment>;
 
     final selection = ClipSelection.around(
       anchor,
       segments: segments,
+      coverage: coverage,
       before: replaying
           ? const Duration(seconds: 30)
           : const Duration(seconds: 60),
       after: replaying ? const Duration(seconds: 30) : Duration.zero,
-      max: _clipMax,
+      max: _trimMax,
     );
 
     if (selection == null) {
@@ -668,10 +693,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     if (!mounted) return;
     setState(() {
       _clipJob = null;
-      _clipMode = _ClipMode(
-        selection: selection,
-        zoom: TrimZoom.forSpan(selection.span),
-      );
+      _clipMode = _ClipMode.opening(selection: selection);
     });
 
     // The picture follows the end being held, so entering the mode moves it to the end that is
@@ -690,12 +712,17 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
         mode.selection.activeAt != selection.activeAt ||
         mode.selection.active != selection.active;
 
+    // A selection dragged out past what this step can show widens to the next one rather than
+    // running off the end, where a handle cannot be reached.
+    final zoom = selection.span * 1.5 > mode.zoom.span
+        ? TrimZoom.forSpan(selection.span)
+        : mode.zoom;
+
+    final moved = mode.copyWith(selection: selection, zoom: zoom);
+
     setState(() {
-      _clipMode = mode.copyWith(
-        selection: selection,
-        // A selection dragged out past what the near track can show widens it rather than running
-        // off the end, where a handle cannot be reached.
-        zoom: selection.span * 1.5 > mode.zoom.span ? TrimZoom.far : mode.zoom,
+      _clipMode = moved.copyWith(
+        window: moved.windowKeeping(selection.activeAt),
       );
     });
 
@@ -747,8 +774,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     if (_isInClip(at)) return;
 
     final grown = at.isBefore(selection.from)
-        ? selection.snapTo(at, selection.to, max: _clipMax)
-        : selection.snapTo(selection.from, at, max: _clipMax);
+        ? selection.snapTo(at, selection.to, max: _trimMax)
+        : selection.snapTo(selection.from, at, max: _trimMax);
 
     _onClipSelectionChanged(grown, timeline);
   }
@@ -832,6 +859,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     cameraName: widget.camera.name,
     from: mode.selection.from,
     to: mode.selection.to,
+    keepLimit: mode.selection.span > _clipMax ? _clipMax : null,
     estimatedBytes: _estimatedBytes(mode.selection),
     // Serval's own read on the window, which is what 12b means by the transcript earning its keep
     // twice — the name it suggests is the sentence the feed already wrote.
@@ -995,8 +1023,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
   /// A reckoning rather than a measurement, and the dialog says "or so" for that reason: the exact
   /// figure does not exist until ffmpeg has written it, and the segment index carries durations
   /// rather than byte counts.
+  ///
+  /// From the seconds actually recorded inside the range rather than the wall time it spans. The
+  /// two differ whenever the camera was down for part of it, and the export closes that gap rather
+  /// than filling it — so the wall time would over-count by exactly the outage.
   int _estimatedBytes(ClipSelection selection) =>
-      (selection.span.inMilliseconds / 1000 * _assumedBytesPerSecond).round();
+      (selection.recorded.inMilliseconds / 1000 * _assumedBytesPerSecond).round();
 
   /// STUB: ~12 Mbps, which is what the design's own 84 MB for 55 seconds works out at — a rate
   /// reasoned from the mock rather than from this camera, so it is wrong by whatever this camera's
@@ -1005,8 +1037,74 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
   /// since a clip is a copy of them.
   static const _assumedBytesPerSecond = 1500 * 1024;
 
-  /// The longest clip the Server will accept. Mirrors `Serval:Media:ClipMaxMinutes`.
-  static const _clipMax = Duration(minutes: 30);
+  /// The longest range the Server will accept, for each of the two things a trim can become.
+  ///
+  /// Both come from the Server — `Serval:Media:ClipMaxMinutes` and `Serval:Media:ExportMaxMinutes` —
+  /// because it is the side that enforces them, and a trimmer offering a range the Server then
+  /// refuses reads as a bug in the trimmer. They differ because the two cost different things: a
+  /// saved clip is a file kept until somebody deletes it, while a download is built as it is sent
+  /// and kept by nobody, so the download's is far the larger of the two.
+  ///
+  /// [kClipMaxFallback] until the catalogue arrives, and still it if the catalogue could not be
+  /// read. Erring low is deliberate: too small a range is a nuisance, too large a one is a refusal
+  /// after the work of trimming it.
+  Duration _clipMax = kClipMaxFallback;
+  Duration _exportMax = kClipMaxFallback;
+
+  /// The larger of the two, which is what the trimmer must be free to reach — the destination is
+  /// not chosen until the save dialog, well after the range has been dragged out.
+  Duration get _trimMax => _clipMax >= _exportMax ? _clipMax : _exportMax;
+
+  /// Reads both caps out of the Server's settings catalogue.
+  ///
+  /// Failure is silent and leaves the fallback in place. This is a limit on a control the person
+  /// has not reached for yet; an error banner about it on opening a camera would be noise about
+  /// nothing they were doing.
+
+  /// How much of the segment index the trimmer reads, either side of the anchor.
+  ///
+  /// Only the handles need segments — they decide where one snaps, so that a handle does not
+  /// promise a second the export cannot deliver. What may be *selected* is not bounded by this any
+  /// more: outside it a handle takes the instant it was dragged to, and the Server includes whole
+  /// segments either way. That is what removed the wall a long drag used to hit.
+  static const _clipSnapWindow = Duration(minutes: 45);
+
+
+  /// Steps the track to a different width.
+  ///
+  /// No fetch behind it any more. The track is drawn from coverage, which was read across the whole
+  /// trimmable range when the trimmer opened, so widening shows more of something already known
+  /// rather than asking for it.
+  void _onClipZoomChanged(TrimZoom next) {
+    final mode = _clipMode;
+    if (mode == null) return;
+
+    setState(() => _clipMode = mode.zoomedTo(next));
+  }
+  Future<void> _readClipLimits() async {
+    try {
+      final settings = await _repository.settings();
+      final clip = settings['Serval:Media:ClipMaxMinutes']?.asNumber;
+      final export = settings['Serval:Media:ExportMaxMinutes']?.asNumber;
+
+      if (!mounted) return;
+      setState(() {
+        if (clip != null) _clipMax = Duration(minutes: clip.round());
+        if (export != null) {
+          // Capped where the browser cannot write the file as it arrives: a tab that tries to hold
+          // a multi-gigabyte export in memory dies with no error at all, which is a far worse
+          // answer than a range it would not let you drag out in the first place.
+          final allowed = Duration(minutes: export.round());
+          _exportMax =
+              _repository.streamsMediaToDisk || allowed <= kClipMaxFallback
+              ? allowed
+              : kClipMaxFallback;
+        }
+      });
+    } catch (_) {
+      // Keep the fallback.
+    }
+  }
 
   /// Success clears itself after a few seconds; a failure stays until the next attempt, because it
   /// is the only place the reason is written down.
@@ -1163,13 +1261,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
                                 zoom: mode.zoom,
                                 window: mode.window,
                                 marks: timeline.marks,
-                                max: _clipMax,
+                                max: _trimMax,
                                 saving: _clipJob is _SaveWorking,
                                 onChanged: (s) =>
                                     _onClipSelectionChanged(s, timeline),
-                                onZoomChanged: (z) => setState(
-                                  () => _clipMode = mode.copyWith(zoom: z),
-                                ),
+                                onZoomChanged: _onClipZoomChanged,
                                 onCancel: _exitClipMode,
                                 onSave: () => _onConfirmClip(timeline),
                               )
@@ -1673,10 +1769,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
       window: mode.window,
       marks: timeline.marks,
       compact: true,
-      max: _clipMax,
+      max: _trimMax,
       saving: _clipJob is _SaveWorking,
       onChanged: (s) => _onClipSelectionChanged(s, timeline),
-      onZoomChanged: (z) => setState(() => _clipMode = mode.copyWith(zoom: z)),
+      onZoomChanged: _onClipZoomChanged,
       onCancel: _exitClipMode,
       onSave: () => _onConfirmClip(timeline),
       onWholeEvent: event == null
@@ -1685,7 +1781,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
               mode.selection.snapTo(
                 event.at,
                 event.at.add(event.ran),
-                max: _clipMax,
+                max: _trimMax,
               ),
               timeline,
             ),

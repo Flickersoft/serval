@@ -54,6 +54,87 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+
+  group('reaching a long range', () {
+    /// The width of track currently drawn, which is what a handle can be dragged across.
+    Duration drawnSpan(WidgetTester tester) =>
+        tester.widget<TrimTrack>(find.byType(TrimTrack).first).window.duration;
+
+    testWidgets('Wider actually widens the track, every step of the way', (
+      tester,
+    ) async {
+      sizeTo(tester, const Size(1400, 900));
+      await tester.pumpWidget(camera('front-door'));
+      await tester.pumpAndSettle();
+      await enterClipMode(tester);
+
+      final widths = <Duration>[drawnSpan(tester)];
+
+      // Four taps should walk 12 min → 1 h → 3 h → 6 h → 12 h. This is the test that would have
+      // caught "clicking Wider does nothing except change the word to Closer": the control changed
+      // the zoom while the track kept drawing its old window, so nothing on screen moved.
+      for (var tap = 0; tap < 4; tap++) {
+        await tester.tap(find.text('Wider'));
+        await tester.pumpAndSettle();
+
+        final now = drawnSpan(tester);
+        expect(
+          now,
+          greaterThan(widths.last),
+          reason: 'tap ${tap + 1} left the track at ${widths.last}',
+        );
+        widths.add(now);
+      }
+
+      expect(widths.last, const Duration(hours: 12));
+    });
+
+    testWidgets('the widened track can hold a selection longer than an hour', (
+      tester,
+    ) async {
+      sizeTo(tester, const Size(1400, 900));
+      await tester.pumpWidget(camera('front-door'));
+      await tester.pumpAndSettle();
+      await enterClipMode(tester);
+
+      for (var tap = 0; tap < 4; tap++) {
+        await tester.tap(find.text('Wider'));
+        await tester.pumpAndSettle();
+      }
+
+      // Drag a range out from the left of the track to well right of centre — away from the
+      // existing selection, which at this zoom is a pixel wide in the middle. This is the gesture
+      // the trimmer was missing: moving an end can only ever adjust the minute you already have.
+      final track = find.byType(TrimTrack).first;
+      final box = tester.getRect(track);
+      final y = box.center.dy;
+
+      final gesture = await tester.startGesture(Offset(box.left + 60, y));
+      await tester.pump(const Duration(milliseconds: 16));
+
+      for (var step = 1; step <= 12; step++) {
+        await gesture.moveTo(Offset(box.left + 60 + (box.width * 0.6) * step / 12, y));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      await tester.timedDrag(
+        track,
+        Offset(box.width * 0.45, 0),
+        const Duration(milliseconds: 300),
+      );
+      await tester.pumpAndSettle();
+
+      final trimmer = tester.widget<ClipTrimmer>(find.byType(ClipTrimmer));
+      expect(
+        trimmer.selection.span,
+        greaterThan(const Duration(hours: 1)),
+        reason: 'the trimmer still refuses to go past an hour',
+      );
+    });
+  });
   group('entering', () {
     testWidgets('Save clip opens the trimmer instead of exporting', (
       tester,

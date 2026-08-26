@@ -30,7 +30,7 @@ class ClipTrimmer extends StatelessWidget {
     required this.onSave,
     this.onWholeEvent,
     this.compact = false,
-    this.max = const Duration(minutes: 30),
+    this.max = kClipMaxFallback,
     this.saving = false,
   });
 
@@ -75,37 +75,69 @@ class ClipTrimmer extends StatelessWidget {
         onChanged: onChanged,
         max: max,
       ),
-      Row(
-        spacing: 10,
-        children: [
-          _stepper(ClipEnd.start, 'From'),
-          _stepper(ClipEnd.end, 'To'),
-          Flexible(
-            child: Text(
-              // Rendered from the segments rather than written down, because under -c:v copy a
-              // segment is as long as the camera's GOP made it — so a hardcoded "one second" would
-              // promise precision the export cannot deliver.
-              '${clipSpokenLabel(selection.nudge)} a nudge · up to $_maxLabel in a clip',
-              style: TextStyle(
-                fontSize: 12.5,
-                color: Nocturne.mix(Nocturne.text, 45),
-              ),
-              overflow: TextOverflow.ellipsis,
+      // Two lines when one will not hold them, rather than an overflow stripe.
+      //
+      // Everything on this row grows with the range: the times gain a date, the duration on the
+      // save button gains an hours figure. It fitted comfortably when a clip was at most half an
+      // hour and does not at twelve, and there is nothing here that can be given up — the note
+      // already collapses to nothing before anything else yields.
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final controls = [
+            _stepper(ClipEnd.start, 'From'),
+            _stepper(ClipEnd.end, 'To'),
+          ];
+
+          final actions = [
+            NocturneButton(
+              label: 'Cancel',
+              variant: NocturneButtonVariant.secondary,
+              onPressed: saving ? null : onCancel,
             ),
-          ),
-          const Spacer(),
-          NocturneButton(
-            label: 'Cancel',
-            variant: NocturneButtonVariant.secondary,
-            onPressed: saving ? null : onCancel,
-          ),
-          NocturneButton(
-            label: 'Save these ${clipSpokenLabel(selection.span)}…',
-            icon: PhosphorIconsRegular.scissors,
-            variant: NocturneButtonVariant.primary,
-            onPressed: saving ? null : onSave,
-          ),
-        ],
+            NocturneButton(
+              label: _saveLabel,
+              icon: PhosphorIconsRegular.scissors,
+              variant: NocturneButtonVariant.primary,
+              onPressed: saving ? null : onSave,
+            ),
+          ];
+
+          if (constraints.maxWidth >= _oneLineControls) {
+            return Row(
+              spacing: 10,
+              children: [
+                ...controls,
+                Expanded(
+                  child: Text(
+                    // Rendered from the segments rather than written down, because under -c:v copy
+                    // a segment is as long as the camera's GOP made it — so a hardcoded "one
+                    // second" would promise precision the export cannot deliver.
+                    '${clipSpokenLabel(selection.nudge)} a nudge · up to $_maxLabel in a clip',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: Nocturne.mix(Nocturne.text, 45),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                ...actions,
+              ],
+            );
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            spacing: 8,
+            children: [
+              Row(spacing: 10, children: controls),
+              Row(
+                spacing: 10,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: actions,
+              ),
+            ],
+          );
+        },
       ),
     ],
   );
@@ -270,10 +302,13 @@ class ClipTrimmer extends StatelessWidget {
       );
 
   Widget _widerLink() {
-    final wider = zoom.isNear;
+    // Steps out through the ladder and snaps back to the closest view at the end of it, rather
+    // than toggling two fixed widths — there are five steps now, and a control that jumped
+    // straight from twelve minutes to twelve hours would skip every width worth trimming at.
+    final wider = !zoom.isWidest;
 
     return GestureDetector(
-      onTap: () => onZoomChanged(wider ? TrimZoom.far : TrimZoom.near),
+      onTap: () => onZoomChanged(wider ? zoom.wider : TrimZoom.near),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         spacing: 6,
@@ -462,6 +497,22 @@ class ClipTrimmer extends StatelessWidget {
 
   /// Abbreviated, because this caption is the first thing the row gives up when the window
   /// narrows — and "up to 30 minut…" is worse than "up to 30 min".
+
+  /// What the save button says.
+  ///
+  /// "Save these 55 s…" is the sentence this control wants, and it stops fitting once a range runs
+  /// to hours: the duration grows, the times in the steppers gain a date, and the row has nothing
+  /// left to give. Long ranges drop the two words that carry no information rather than the figure,
+  /// which is the part somebody is checking before they commit to a multi-gigabyte export.
+  String get _saveLabel => selection.span < const Duration(hours: 1)
+      ? 'Save these ${clipSpokenLabel(selection.span)}…'
+      : 'Save ${clipSpokenLabel(selection.span)}…';
+  /// Below this the controls and the actions take a line each.
+  ///
+  /// Measured rather than guessed: the row wants a little over 1010px once a range is long enough
+  /// to put a date in both steppers and an hours figure on the save button.
+  static const _oneLineControls = 1020.0;
+
   String get _maxLabel =>
       max.inMinutes >= 60 ? '${max.inHours} h' : '${max.inMinutes} min';
 

@@ -582,13 +582,15 @@ builder.Services.AddCors(options => options.AddPolicy(AppCorsPolicy, policy =>
 
     // AllowAnyHeader governs the *request*; a browser can read no response header beyond the
     // CORS-safelisted six unless it is named here. Without this the web build cannot see the
-    // filename it is meant to save a clip under, nor learn that the clip was truncated at a
-    // session boundary — both would fail silently, and only on web.
+    // filename it is meant to save a clip under, nor learn how much of the range it actually got
+    // — both would fail silently, and only on web.
     policy.WithExposedHeaders(
         "Content-Disposition",
         "X-Serval-Clip-From",
         "X-Serval-Clip-To",
-        "X-Serval-Clip-Truncated");
+        "X-Serval-Clip-Truncated",
+        "X-Serval-Clip-Duration",
+        "X-Serval-Clip-Sessions");
 }));
 
 // A second, narrow policy for the one route a *Google-hosted page* calls in a browser.

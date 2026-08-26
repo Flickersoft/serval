@@ -2510,6 +2510,9 @@ class LiveServalRepository implements ServalRepository {
   bool get canSaveMedia => true;
 
   @override
+  bool get streamsMediaToDisk => _saver.streamsToDisk;
+
+  @override
   Future<SavedMedia> saveSnapshot(String cameraId) async {
     final stamp = _fileStamp(DateTime.now());
     final download = await _api.openMedia(
@@ -2567,6 +2570,20 @@ class LiveServalRepository implements ServalRepository {
     } on Object {
       // An empty list reads as "nothing here to trim", which is what the trimmer would show anyway
       // — and is better than a mode that refuses to open because one request failed.
+      return const [];
+    }
+  }
+
+  @override
+  Future<List<CoverageSpan>> coverageFor(
+    String cameraId, {
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    try {
+      return await _api.coverage(cameraId, from: from, to: to);
+    } on Object {
+      // Empty reads as "nothing recorded here", which is what the trimmer would draw anyway.
       return const [];
     }
   }

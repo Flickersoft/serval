@@ -19,7 +19,7 @@ import '../theme/serval_tokens.dart';
 /// Prop-driven like every widget here: it takes a [ClipSelection] and reports the one the gesture
 /// implies. All the arithmetic — snapping, capping, refusing to cross — lives in that model, so
 /// this file is only geometry and paint.
-class TrimTrack extends StatelessWidget {
+class TrimTrack extends StatefulWidget {
   const TrimTrack({
     super.key,
     required this.selection,
@@ -27,7 +27,7 @@ class TrimTrack extends StatelessWidget {
     required this.marks,
     required this.onChanged,
     this.compact = false,
-    this.max = const Duration(minutes: 30),
+    this.max = kClipMaxFallback,
   });
 
   /// The range being trimmed.
@@ -46,10 +46,62 @@ class TrimTrack extends StatelessWidget {
 
   final Duration max;
 
+
+  @override
+  State<TrimTrack> createState() => _TrimTrackState();
+}
+
+class _TrimTrackState extends State<TrimTrack> {
+  /// Where a fresh range is being dragged out from, or null while an existing end is being moved.
+  DateTime? _anchor;
+
+  ClipSelection get selection => widget.selection;
+  CoverageSpan get window => widget.window;
+  List<TimelineMark> get marks => widget.marks;
+  ValueChanged<ClipSelection> get onChanged => widget.onChanged;
+  bool get compact => widget.compact;
+  Duration get max => widget.max;
+
   double get _handleWidth => compact ? 22 : 14;
+
+  /// How near a press has to land to count as grabbing a handle rather than starting a new range.
+  ///
+  /// Generous, because the two mistakes cost differently: taking a grab for a fresh drag throws
+  /// away a range somebody had already set, while taking a fresh drag for a grab only moves an end
+  /// they can move straight back.
+  double get _grabRadius => _handleWidth * 1.6;
 
   static const _height = 80.0;
   static const _compactHeight = 78.0;
+
+  void _onDragStart(_TrimGeometry geometry, double dx) {
+    final toStart = (dx - geometry.xOf(selection.from)).abs();
+    final toEnd = (dx - geometry.xOf(selection.to)).abs();
+
+    if (toStart <= _grabRadius || toEnd <= _grabRadius) {
+      // Near enough to a handle to have meant it: adjust the range that is already there.
+      _anchor = null;
+      onChanged(
+        selection.withActive(toStart <= toEnd ? ClipEnd.start : ClipEnd.end),
+      );
+      return;
+    }
+
+    // Away from both handles, so this is a new range rather than an adjustment. The press alone
+    // changes nothing; a range appears once the drag has a direction to it.
+    _anchor = geometry.timeAt(dx);
+  }
+
+  void _onDragUpdate(_TrimGeometry geometry, double dx) {
+    final at = geometry.timeAt(dx);
+    final anchor = _anchor;
+
+    onChanged(
+      anchor != null
+          ? selection.dragFrom(anchor, at, max: max)
+          : selection.moveEnd(selection.active, at, max: max),
+    );
+  }
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -66,16 +118,12 @@ class TrimTrack extends StatelessWidget {
           // One detector over the whole track rather than one per handle, which is both simpler
           // and kinder: the end you grab is the nearer one, so a drag that starts a few pixels off
           // a 14px bar still moves the handle you were aiming at instead of nothing.
-          onHorizontalDragStart: (details) => onChanged(
-            selection.withActive(_nearest(geometry, details.localPosition.dx)),
-          ),
-          onHorizontalDragUpdate: (details) => onChanged(
-            selection.moveEnd(
-              selection.active,
-              geometry.timeAt(details.localPosition.dx),
-              max: max,
-            ),
-          ),
+          onHorizontalDragStart: (details) =>
+              _onDragStart(geometry, details.localPosition.dx),
+          onHorizontalDragUpdate: (details) =>
+              _onDragUpdate(geometry, details.localPosition.dx),
+          onHorizontalDragEnd: (_) => _anchor = null,
+          onHorizontalDragCancel: () => _anchor = null,
           child: DecoratedBox(
             decoration: BoxDecoration(
               color: Nocturne.mix(Nocturne.text, 5),
@@ -201,16 +249,6 @@ class TrimTrack extends StatelessWidget {
       ),
     );
   }
-
-  /// Which end a drag starting at [x] means.
-  ///
-  /// By distance rather than by hit-testing the bars, so the miss that a 14px target invites still
-  /// does the obvious thing instead of nothing.
-  ClipEnd _nearest(_TrimGeometry geometry, double x) =>
-      (x - geometry.xOf(selection.from)).abs() <=
-          (x - geometry.xOf(selection.to)).abs()
-      ? ClipEnd.start
-      : ClipEnd.end;
 
   /// A range end, drawn. The gesture belongs to the track above; this is the mark you aim at.
   Widget _handle(_TrimGeometry geometry, ClipEnd end, double width) {

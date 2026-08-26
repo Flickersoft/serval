@@ -534,6 +534,14 @@ abstract interface class ServalRepository {
   /// WebRTC and [vodUrlFor] does for replay.
   bool get canSaveMedia;
 
+  /// Whether a download is written to disk as it arrives, rather than held in memory until it is
+  /// complete.
+  ///
+  /// False only in a browser without the File System Access API. The clip screen reads it to cap
+  /// what it will let somebody ask for there — a twelve-hour export is several gigabytes, and a
+  /// tab that tries to hold one dies silently.
+  bool get streamsMediaToDisk;
+
   /// Save the camera's latest still to the device.
   ///
   /// **Live only.** `snapshot.jpg` is the newest frame and no route extracts a still at a past
@@ -563,6 +571,18 @@ abstract interface class ServalRepository {
   /// Empty where nothing was recorded, which the trimmer reads as "there is nothing here to trim"
   /// rather than as a failure.
   Future<List<RecordedSegment>> segmentsFor(
+    String cameraId, {
+    required DateTime from,
+    required DateTime to,
+  });
+
+  /// Where footage exists across a window, merged — one span per recording session.
+  ///
+  /// What the trim track is drawn from, and deliberately not [segmentsFor]. That route is one row
+  /// per segment, so a twelve-hour range is ten thousand rows and megabytes of JSON; this is one to
+  /// three rows for a whole day. Asking for segments to decide what the track may show is what
+  /// forced the track to be narrow, which is what made a long clip unreachable.
+  Future<List<CoverageSpan>> coverageFor(
     String cameraId, {
     required DateTime from,
     required DateTime to,

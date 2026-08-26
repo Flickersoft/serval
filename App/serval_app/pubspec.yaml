@@ -71,6 +71,14 @@ dependencies:
   # opinions — but none of those paths are taken on web or Linux.
   file_picker: ^12.0.0
 
+  # Streaming a long export straight to disk on the web build. Its `saveAsStream` writes chunks
+  # through the File System Access API instead of collecting them into a Blob, which is what makes
+  # a multi-gigabyte download survivable in a browser tab — the old path held roughly three copies
+  # of the file in memory at once. Web only, deliberately: the same call on native stages the
+  # stream through a temporary file first, which for a 20 GB export is a second full write that
+  # lib/media/saver_native.dart already avoids.
+  file_saver: ^0.4.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
