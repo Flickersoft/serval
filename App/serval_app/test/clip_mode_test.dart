@@ -54,7 +54,6 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-
   group('reaching a long range', () {
     /// The width of track currently drawn, which is what a handle can be dragged across.
     Duration drawnSpan(WidgetTester tester) =>
@@ -113,7 +112,9 @@ void main() {
       await tester.pump(const Duration(milliseconds: 16));
 
       for (var step = 1; step <= 12; step++) {
-        await gesture.moveTo(Offset(box.left + 60 + (box.width * 0.6) * step / 12, y));
+        await gesture.moveTo(
+          Offset(box.left + 60 + (box.width * 0.6) * step / 12, y),
+        );
         await tester.pump(const Duration(milliseconds: 16));
       }
 

@@ -143,10 +143,10 @@ void main() {
         segments: segments,
       )!;
 
-      expect(
-        selection.segments.map((s) => s.initFileName).toSet(),
-        {'init-a.mp4', 'init-b.mp4'},
-      );
+      expect(selection.segments.map((s) => s.initFileName).toSet(), {
+        'init-a.mp4',
+        'init-b.mp4',
+      });
     });
 
     test('a range crossing a restart reaches into the second session', () {
@@ -159,16 +159,20 @@ void main() {
         ),
       ];
 
-      final selection = ClipSelection.around(
-        start.add(const Duration(seconds: 20)),
-        segments: segments,
-      )!.moveEnd(ClipEnd.end, start.add(const Duration(minutes: 1, seconds: 20)));
+      final selection =
+          ClipSelection.around(
+            start.add(const Duration(seconds: 20)),
+            segments: segments,
+          )!.moveEnd(
+            ClipEnd.end,
+            start.add(const Duration(minutes: 1, seconds: 20)),
+          );
 
       // Both sessions are reachable, which is what the joining is for.
-      expect(
-        selection.segments.map((s) => s.initFileName).toSet(),
-        {'init-a.mp4', 'init-b.mp4'},
-      );
+      expect(selection.segments.map((s) => s.initFileName).toSet(), {
+        'init-a.mp4',
+        'init-b.mp4',
+      });
 
       // Past the start of the second session, rather than stopping at the end of the first.
       expect(
@@ -193,18 +197,22 @@ void main() {
         ),
       ];
 
-      final selection = ClipSelection.around(
-        start.add(const Duration(seconds: 20)),
-        segments: [
-          ...session(10),
-          ...session(
-            10,
-            init: 'init-b.mp4',
-            from: start.add(const Duration(minutes: 1)),
-          ),
-        ],
-        coverage: coverage,
-      )!.moveEnd(ClipEnd.end, start.add(const Duration(minutes: 1, seconds: 40)));
+      final selection =
+          ClipSelection.around(
+            start.add(const Duration(seconds: 20)),
+            segments: [
+              ...session(10),
+              ...session(
+                10,
+                init: 'init-b.mp4',
+                from: start.add(const Duration(minutes: 1)),
+              ),
+            ],
+            coverage: coverage,
+          )!.moveEnd(
+            ClipEnd.end,
+            start.add(const Duration(minutes: 1, seconds: 40)),
+          );
 
       expect(selection.from, start);
       expect(selection.recorded, lessThan(selection.span));
@@ -429,7 +437,11 @@ void main() {
 
       while (!zoom.isWidest && taps < 20) {
         final next = zoom.wider;
-        expect(next.span, greaterThan(zoom.span), reason: 'step $taps did not widen');
+        expect(
+          next.span,
+          greaterThan(zoom.span),
+          reason: 'step $taps did not widen',
+        );
         zoom = next;
         taps++;
       }
@@ -441,7 +453,10 @@ void main() {
       // The bug this exists for: the widest step used to be one hour, and a handle can only be
       // dragged inside the window the track draws — so the trimmer refused to go past an hour no
       // matter what Media:ExportMaxMinutes said. The cap is only real if the track can show it.
-      expect(TrimZoom.steps.last, greaterThanOrEqualTo(const Duration(hours: 12)));
+      expect(
+        TrimZoom.steps.last,
+        greaterThanOrEqualTo(const Duration(hours: 12)),
+      );
     });
 
     test('a multi-hour selection gets a step that can hold it', () {
@@ -495,7 +510,10 @@ void main() {
 
       expect(panned.from.isAfter(window.from), isTrue);
       expect(panned.duration, zoom.span);
-      expect(panned.to.isAfter(start.add(const Duration(minutes: 11, seconds: 30))), isTrue);
+      expect(
+        panned.to.isAfter(start.add(const Duration(minutes: 11, seconds: 30))),
+        isTrue,
+      );
     });
     test('a short clip gets the near step, a long one the far step', () {
       expect(TrimZoom.forSpan(const Duration(seconds: 55)).isNear, isTrue);

@@ -1028,7 +1028,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
   /// two differ whenever the camera was down for part of it, and the export closes that gap rather
   /// than filling it — so the wall time would over-count by exactly the outage.
   int _estimatedBytes(ClipSelection selection) =>
-      (selection.recorded.inMilliseconds / 1000 * _assumedBytesPerSecond).round();
+      (selection.recorded.inMilliseconds / 1000 * _assumedBytesPerSecond)
+          .round();
 
   /// STUB: ~12 Mbps, which is what the design's own 84 MB for 55 seconds works out at — a rate
   /// reasoned from the mock rather than from this camera, so it is wrong by whatever this camera's
@@ -1069,7 +1070,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
   /// segments either way. That is what removed the wall a long drag used to hit.
   static const _clipSnapWindow = Duration(minutes: 45);
 
-
   /// Steps the track to a different width.
   ///
   /// No fetch behind it any more. The track is drawn from coverage, which was read across the whole
@@ -1081,6 +1081,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
 
     setState(() => _clipMode = mode.zoomedTo(next));
   }
+
   Future<void> _readClipLimits() async {
     try {
       final settings = await _repository.settings();

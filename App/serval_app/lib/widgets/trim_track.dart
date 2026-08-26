@@ -46,7 +46,6 @@ class TrimTrack extends StatefulWidget {
 
   final Duration max;
 
-
   @override
   State<TrimTrack> createState() => _TrimTrackState();
 }

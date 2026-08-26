@@ -507,6 +507,7 @@ class ClipTrimmer extends StatelessWidget {
   String get _saveLabel => selection.span < const Duration(hours: 1)
       ? 'Save these ${clipSpokenLabel(selection.span)}…'
       : 'Save ${clipSpokenLabel(selection.span)}…';
+
   /// Below this the controls and the actions take a line each.
   ///
   /// Measured rather than guessed: the row wants a little over 1010px once a range is long enough

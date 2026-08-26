@@ -143,14 +143,13 @@ class ClipSelection {
     return middle > Duration.zero ? middle : const Duration(seconds: 4);
   }
 
-  ClipSelection withActive(ClipEnd end) =>
-      ClipSelection(
-        from: from,
-        to: to,
-        segments: segments,
-        coverage: coverage,
-        active: end,
-      );
+  ClipSelection withActive(ClipEnd end) => ClipSelection(
+    from: from,
+    to: to,
+    segments: segments,
+    coverage: coverage,
+    active: end,
+  );
 
   /// Moves one end to [at], snapped to a segment boundary.
   ///
@@ -188,10 +187,7 @@ class ClipSelection {
   }
 
   /// Moves the live end by [steps] segments. Negative goes earlier.
-  ClipSelection nudgeBy(
-    int steps, {
-    Duration max = kClipMaxFallback,
-  }) {
+  ClipSelection nudgeBy(int steps, {Duration max = kClipMaxFallback}) {
     final at = _stepFrom(activeAt, steps);
     return moveEnd(active, at, max: max);
   }
