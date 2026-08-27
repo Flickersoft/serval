@@ -15,7 +15,7 @@
 # Not App/serval_app/.metadata, which is where this used to point: Flutter writes that file on
 # create and migrate but *not* on upgrade, so it still records the revision the project was created
 # with and drifted silently the first time the SDK moved.
-ARG FLUTTER_REVISION=6b182d2c7585eba26d4edce0f97630effd256c33
+ARG FLUTTER_REVISION=6655482ec06e547f90abf8ae7590466f4415978d
 
 FROM debian:bookworm-slim AS app
 RUN apt-get update \

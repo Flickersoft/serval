@@ -257,149 +257,137 @@ void main() {
     }
   });
 
-  test(
-    'every camera reports what its PTZ can actually do',
-    () async {
-      for (final camera in repository.cameras()) {
-        // Self-priming: the first read kicks the probe and returns "probing".
-        expect(repository.ptzProbeFor(camera.id), isA<PtzProbe>());
-      }
+  test('every camera reports what its PTZ can actually do', () async {
+    for (final camera in repository.cameras()) {
+      // Self-priming: the first read kicks the probe and returns "probing".
+      expect(repository.ptzProbeFor(camera.id), isA<PtzProbe>());
+    }
 
-      // One ONVIF round trip per camera, plus slack for an unresponsive one.
-      await Future<void>.delayed(const Duration(seconds: 12));
+    // One ONVIF round trip per camera, plus slack for an unresponsive one.
+    await Future<void>.delayed(const Duration(seconds: 12));
 
-      for (final camera in repository.cameras()) {
-        final probe = repository.ptzProbeFor(camera.id);
-        expect(
-          probe,
-          isNot(isA<PtzProbing>()),
-          reason: '${camera.id} should have settled by now',
-        );
+    for (final camera in repository.cameras()) {
+      final probe = repository.ptzProbeFor(camera.id);
+      expect(
+        probe,
+        isNot(isA<PtzProbing>()),
+        reason: '${camera.id} should have settled by now',
+      );
 
-        switch (probe) {
-          case PtzKnown(:final panTilt, :final zoom, :final presets):
-            // The whole point: a camera that pans but does not zoom must say so, rather than being
-            // drawn from "an ONVIF URL is set".
-            debugPrint(
-              '${camera.id}: panTilt=$panTilt zoom=$zoom presets=${presets.length}',
-            );
-            for (final preset in presets) {
-              expect(
-                preset.token,
-                isNotEmpty,
-                reason: 'a preset with no token cannot be recalled',
-              );
-            }
-          case PtzUnknown(:final reason):
-            debugPrint('${camera.id}: unavailable — $reason');
-          case PtzNotConfigured():
+      switch (probe) {
+        case PtzKnown(:final panTilt, :final zoom, :final presets):
+          // The whole point: a camera that pans but does not zoom must say so, rather than being
+          // drawn from "an ONVIF URL is set".
+          debugPrint(
+            '${camera.id}: panTilt=$panTilt zoom=$zoom presets=${presets.length}',
+          );
+          for (final preset in presets) {
             expect(
-              repository.cameraRecordById(camera.id)?.ptzConfigured,
-              isFalse,
-              reason:
-                  'only a camera with no ONVIF endpoint should read as unconfigured',
+              preset.token,
+              isNotEmpty,
+              reason: 'a preset with no token cannot be recalled',
             );
-          case PtzProbing():
-            fail('unreachable — asserted above');
-        }
+          }
+        case PtzUnknown(:final reason):
+          debugPrint('${camera.id}: unavailable — $reason');
+        case PtzNotConfigured():
+          expect(
+            repository.cameraRecordById(camera.id)?.ptzConfigured,
+            isFalse,
+            reason:
+                'only a camera with no ONVIF endpoint should read as unconfigured',
+          );
+        case PtzProbing():
+          fail('unreachable — asserted above');
       }
-    },
-    timeout: const Timeout(Duration(seconds: 60)),
-  );
+    }
+  }, timeout: const Timeout(Duration(seconds: 60)));
 
-  test(
-    'a camera says what make and model it is',
-    () async {
-      final withOnvif = repository
-          .cameraRecords()
-          .where((record) => record.ptzConfigured)
-          .toList();
+  test('a camera says what make and model it is', () async {
+    final withOnvif = repository
+        .cameraRecords()
+        .where((record) => record.ptzConfigured)
+        .toList();
 
-      if (withOnvif.isEmpty) {
-        markTestSkipped('no camera on this Server has an ONVIF endpoint');
-        return;
-      }
+    if (withOnvif.isEmpty) {
+      markTestSkipped('no camera on this Server has an ONVIF endpoint');
+      return;
+    }
 
-      for (final record in withOnvif) {
-        repository.deviceInformationFor(record.id);
-      }
-      await Future<void>.delayed(const Duration(seconds: 8));
+    for (final record in withOnvif) {
+      repository.deviceInformationFor(record.id);
+    }
+    await Future<void>.delayed(const Duration(seconds: 8));
 
-      // At least one should have answered. Every field is optional in ONVIF, so this asserts the
-      // shape rather than any particular field being present.
-      final answered = [
-        for (final record in withOnvif)
-          ?repository.deviceInformationFor(record.id),
-      ];
+    // At least one should have answered. Every field is optional in ONVIF, so this asserts the
+    // shape rather than any particular field being present.
+    final answered = [
+      for (final record in withOnvif)
+        ?repository.deviceInformationFor(record.id),
+    ];
 
-      expect(
-        answered,
-        isNotEmpty,
-        reason: 'no camera answered GetDeviceInformation',
-      );
-      for (final info in answered) {
-        debugPrint(
-          'device: ${info.productLabel} · firmware ${info.firmwareVersion}',
-        );
-      }
-    },
-    timeout: const Timeout(Duration(seconds: 60)),
-  );
-
-  test(
-    'a recorded window exports as a clip, and says what it covers',
-    () async {
-      final camera = repository.cameras().first;
-      final to = DateTime.now().subtract(const Duration(minutes: 1));
-      final from = to.subtract(const Duration(seconds: 20));
-
-      final coverage = await repository.api.coverage(
-        camera.id,
-        from: from,
-        to: to,
-      );
-      if (coverage.isEmpty) {
-        markTestSkipped('${camera.id} recorded nothing in the last minute');
-        return;
-      }
-
-      final download = await repository.api.openMedia(
-        repository.api.clipUrl(camera.id, from: from, to: to),
-        fallbackName: 'fallback.mp4',
-      );
-
-      // Drained rather than saved: this test writes nothing to the machine it runs on.
-      var bytes = 0;
-      await for (final chunk in download.stream) {
-        bytes += chunk.length;
-      }
-
-      expect(
-        bytes,
-        greaterThan(0),
-        reason: 'an exported clip should have a body',
-      );
-      expect(
-        download.fileName,
-        endsWith('.mp4'),
-        reason: 'the Server names the file in Content-Disposition',
-      );
-
-      // Only readable at all because the Server exposes these through CORS; on the VM they always
-      // arrive, so this pins that the route sets them.
-      expect(download.from, isNotNull, reason: 'X-Serval-Clip-From');
-      expect(download.to, isNotNull, reason: 'X-Serval-Clip-To');
-      expect(
-        download.from!.isBefore(download.to!),
-        isTrue,
-        reason: 'the reported window should run forwards',
-      );
+    expect(
+      answered,
+      isNotEmpty,
+      reason: 'no camera answered GetDeviceInformation',
+    );
+    for (final info in answered) {
       debugPrint(
-        'clip: $bytes bytes, ${download.covered?.inSeconds} s, truncated=${download.truncated}',
+        'device: ${info.productLabel} · firmware ${info.firmwareVersion}',
       );
-    },
-    timeout: const Timeout(Duration(seconds: 90)),
-  );
+    }
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
+  test('a recorded window exports as a clip, and says what it covers', () async {
+    final camera = repository.cameras().first;
+    final to = DateTime.now().subtract(const Duration(minutes: 1));
+    final from = to.subtract(const Duration(seconds: 20));
+
+    final coverage = await repository.api.coverage(
+      camera.id,
+      from: from,
+      to: to,
+    );
+    if (coverage.isEmpty) {
+      markTestSkipped('${camera.id} recorded nothing in the last minute');
+      return;
+    }
+
+    final download = await repository.api.openMedia(
+      repository.api.clipUrl(camera.id, from: from, to: to),
+      fallbackName: 'fallback.mp4',
+    );
+
+    // Drained rather than saved: this test writes nothing to the machine it runs on.
+    var bytes = 0;
+    await for (final chunk in download.stream) {
+      bytes += chunk.length;
+    }
+
+    expect(
+      bytes,
+      greaterThan(0),
+      reason: 'an exported clip should have a body',
+    );
+    expect(
+      download.fileName,
+      endsWith('.mp4'),
+      reason: 'the Server names the file in Content-Disposition',
+    );
+
+    // Only readable at all because the Server exposes these through CORS; on the VM they always
+    // arrive, so this pins that the route sets them.
+    expect(download.from, isNotNull, reason: 'X-Serval-Clip-From');
+    expect(download.to, isNotNull, reason: 'X-Serval-Clip-To');
+    expect(
+      download.from!.isBefore(download.to!),
+      isTrue,
+      reason: 'the reported window should run forwards',
+    );
+    debugPrint(
+      'clip: $bytes bytes, ${download.covered?.inSeconds} s, truncated=${download.truncated}',
+    );
+  }, timeout: const Timeout(Duration(seconds: 90)));
 
   group('the screens render this Server’s own data', () {
     // The widget tests cover layout against the sample content. These cover it against whatever

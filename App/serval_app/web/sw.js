@@ -28,7 +28,10 @@ self.addEventListener('push', (event) => {
   const options = {
     body: payload.body || '',
     icon: 'icons/Icon-192.png',
-    badge: 'icons/Icon-192.png',
+    // Android throws away the badge's colour and keeps only its alpha channel, so the badge has to
+    // be a silhouette on transparency: the app icon's opaque tile masks to a solid white square in
+    // the status bar. badge-96.png is the same cat head with nothing but the shape left.
+    badge: 'icons/badge-96.png',
     // One notification per camera: a camera alerting three times while a phone is in a pocket
     // should replace its own notification rather than stack three. The server sets the same value
     // as the push Topic so the collapsing also happens upstream, before delivery.
