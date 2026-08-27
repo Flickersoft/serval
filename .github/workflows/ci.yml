@@ -120,18 +120,18 @@ jobs:
         with:
           # Exact, not a range, and this is the load-bearing line in the job. Both `dart format`'s
           # output and the test rasterizer move between SDK versions, so a floating `stable` would
-          # eventually reformat a file nobody touched, or redraw the 28 screenshots under
-          # test/goldens/, and fail a branch that changed neither. 3.44.9 is the SDK those were
+          # eventually reformat a file nobody touched, or redraw the 32 screenshots under
+          # test/goldens/, and fail a branch that changed neither. 3.47.1 is the SDK those were
           # baked with, and this line is the record of what the App is built and tested against.
           #
           # Server/Serval.Server/Dockerfile pins the same SDK by revision
-          # (6b182d2c7585eba26d4edce0f97630effd256c33, which is this tag) so the shipped web bundle
+          # (6655482ec06e547f90abf8ae7590466f4415978d, which is this tag) so the shipped web bundle
           # is built by the SDK that tested it. Bumping one without the other leaves this gate
           # lying, and a bump also means regenerating test/goldens/ — three files or none.
           #
           # Deliberately not read from App/serval_app/.metadata: Flutter writes that on create and
           # migrate but not on upgrade, so it records the revision the project was created with.
-          flutter-version: 3.44.9
+          flutter-version: 3.47.1
           channel: stable
           # The SDK and the pub cache both, from this one input — the action already keys the pub
           # half on pubspec.lock.
