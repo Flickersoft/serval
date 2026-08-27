@@ -258,11 +258,9 @@ void main() {
 
       final withoutCamera = chips[2].without;
       expect(withoutCamera.cameraIds, isEmpty);
-      expect(
-        withoutCamera.kinds,
-        {ActivityKind.speech},
-        reason: 'dropping one filter must not drop the others',
-      );
+      expect(withoutCamera.kinds, {
+        ActivityKind.speech,
+      }, reason: 'dropping one filter must not drop the others');
       expect(withoutCamera.alertsOnly, isTrue);
     });
 
