@@ -26,7 +26,9 @@ self.addEventListener('push', (event) => {
   }
 
   const options = {
-    body: payload.body || '',
+    // No body. `payload.title` is the whole message — "Person at Front door" — and the only other
+    // thing an alert has to say is when, which is `timestamp` below: the OS writes that itself, in
+    // the reader's own timezone and their own choice of clock.
     icon: 'icons/Icon-192.png',
     // Android throws away the badge's colour and keeps only its alpha channel, so the badge has to
     // be a silhouette on transparency: the app icon's opaque tile masks to a solid white square in
