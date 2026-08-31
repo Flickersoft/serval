@@ -57,7 +57,7 @@ dependencies:
 
   # Real URLs on the web build: linkable routes, reload that lands where you were, a back button
   # that stays in the app. The route tree is in lib/router/.
-  go_router: ^17.3.0
+  go_router: ^18.0.0
 
   # The sparklines under the vitals meters. The one property this chart cannot get wrong is the
   # fiddly one: a sample the Server could not measure has to be a *break* in the line, never a dip
