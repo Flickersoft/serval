@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging.Abstractions;
 using Serval.Server.Ingest;
 
@@ -25,6 +26,8 @@ public class SourceProbeTests : IDisposable
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
+    [SupportedOSPlatformGuard("linux")]
+    [SupportedOSPlatformGuard("macos")]
     private static bool CanRunPosixTools =>
         OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
 
@@ -37,9 +40,15 @@ public class SourceProbeTests : IDisposable
     {
         string path = Path.Combine(_root, "wedged-ffprobe");
         File.WriteAllText(path, "#!/bin/sh\nwhile :; do echo y; done\n");
-        File.SetUnixFileMode(
-            path,
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        // Every caller is already behind this guard. Repeated inside the method because the
+        // platform analyzer follows a check it can see here, not one two frames up the stack.
+        if (CanRunPosixTools)
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
 
         return path;
     }

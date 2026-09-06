@@ -40,7 +40,8 @@ public class ChildProcessTests
 
         // Prints the grandchild's pid, then keeps the parent alive so the tree really is a tree.
         using Process parent = Start("sleep 300 & echo $!; wait");
-        string firstLine = await parent.StandardOutput.ReadLineAsync() ?? "";
+        string firstLine =
+            await parent.StandardOutput.ReadLineAsync(TestContext.Current.CancellationToken) ?? "";
         Assert.True(int.TryParse(firstLine.Trim(), out int grandchild), $"got '{firstLine}'");
 
         ChildProcess.Kill(parent);
