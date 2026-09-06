@@ -19,7 +19,7 @@ public class SourceArgumentsTests
     {
         IReadOnlyList<string> args = SourceArguments.InputArgs(url);
 
-        Assert.Equal(["-rtsp_transport", "tcp", "-i", url], args);
+        Assert.Equal(["-rtsp_transport", "tcp", "-timeout", "30000000", "-i", url], args);
     }
 
     [Fact]
@@ -28,7 +28,10 @@ public class SourceArgumentsTests
         IReadOnlyList<string> args = SourceArguments.InputArgs("rtsp://cam/stream", audioOnly: true);
 
         Assert.Equal(
-            ["-rtsp_transport", "tcp", "-allowed_media_types", "audio", "-i", "rtsp://cam/stream"],
+            [
+                "-rtsp_transport", "tcp", "-allowed_media_types", "audio",
+                "-timeout", "30000000", "-i", "rtsp://cam/stream",
+            ],
             args);
     }
 
@@ -43,8 +46,10 @@ public class SourceArgumentsTests
     [InlineData("srt://cam:9000")]
     public void A_non_rtsp_network_source_gets_no_rtsp_options(string url)
     {
-        Assert.Equal(["-i", url], SourceArguments.InputArgs(url));
-        Assert.Equal(["-i", url], SourceArguments.InputArgs(url, audioOnly: true));
+        Assert.Equal(["-rw_timeout", "30000000", "-i", url], SourceArguments.InputArgs(url));
+        Assert.Equal(
+            ["-rw_timeout", "30000000", "-i", url],
+            SourceArguments.InputArgs(url, audioOnly: true));
     }
 
     [Theory]
@@ -71,14 +76,97 @@ public class SourceArgumentsTests
     public void Probing_an_rtsp_source_keeps_tcp_transport()
     {
         Assert.Equal(
-            ["-rtsp_transport", "tcp", "-i", "rtsp://cam/stream"],
+            ["-rtsp_transport", "tcp", "-timeout", "15000000", "-i", "rtsp://cam/stream"],
             SourceArguments.ProbeArgs("rtsp://cam/stream"));
     }
 
     [Fact]
     public void Probing_a_non_rtsp_source_passes_only_the_url()
     {
-        Assert.Equal(["-i", "rtmp://cam/live"], SourceArguments.ProbeArgs("rtmp://cam/live"));
+        Assert.Equal(
+            ["-rw_timeout", "15000000", "-i", "rtmp://cam/live"],
+            SourceArguments.ProbeArgs("rtmp://cam/live"));
+    }
+
+    // --- the socket deadline ------------------------------------------------------------------
+
+    /// <summary>
+    /// The regression suite for a leak that cost 1.6 GB per incident: a camera that stops answering
+    /// without closing its TCP connection leaves ffmpeg in <c>poll()</c> forever, because an RTSP
+    /// session carries no keepalive to discover the peer is gone. The deadline is what ends it, and
+    /// it is worthless after <c>-i</c>, where it binds to no input.
+    /// </summary>
+    [Theory]
+    [InlineData("rtsp://cam/stream")]
+    [InlineData("http://cam/stream.flv")]
+    [InlineData("srt://cam:9000")]
+    public void A_network_source_carries_its_deadline_before_the_input(string url)
+    {
+        List<string> args = [.. SourceArguments.InputArgs(url)];
+        int deadline = args.IndexOf("-timeout") >= 0
+            ? args.IndexOf("-timeout")
+            : args.IndexOf("-rw_timeout");
+
+        Assert.True(deadline >= 0);
+        Assert.True(deadline < args.IndexOf("-i"));
+    }
+
+    /// <summary>
+    /// Which option carries the deadline is protocol-private in the same way
+    /// <c>-rtsp_transport</c> is, and getting it wrong is worse than inert: on the RTMP protocol
+    /// <c>-timeout</c> means listen-seconds and implies <c>-rtmp_listen 1</c>, which would turn a
+    /// camera pull into a server waiting for an inbound connection.
+    /// </summary>
+    [Theory]
+    [InlineData("http://cam/stream.flv")]
+    [InlineData("rtmp://cam/live/stream")]
+    [InlineData("srt://cam:9000")]
+    public void Only_rtsp_gets_the_demuxers_own_timeout_option(string url)
+    {
+        Assert.DoesNotContain("-timeout", SourceArguments.InputArgs(url));
+        Assert.DoesNotContain("-timeout", SourceArguments.ProbeArgs(url));
+        Assert.Contains("-rw_timeout", SourceArguments.InputArgs(url));
+    }
+
+    /// <summary>
+    /// <c>-rw_timeout</c> is silently ignored by the RTSP demuxer, so the two are an either/or
+    /// rather than a belt-and-braces pair.
+    /// </summary>
+    [Fact]
+    public void An_rtsp_source_never_gets_the_generic_avio_option()
+    {
+        Assert.DoesNotContain("-rw_timeout", SourceArguments.InputArgs("rtsp://cam/stream"));
+        Assert.DoesNotContain("-rw_timeout", SourceArguments.ProbeArgs("rtsp://cam/stream"));
+    }
+
+    /// <summary>A local read cannot half-open, so there is no deadline worth setting on one.</summary>
+    [Theory]
+    [InlineData("/videos/sample.mp4")]
+    [InlineData("file:///videos/sample.mp4")]
+    public void A_file_source_gets_no_deadline(string url)
+    {
+        Assert.DoesNotContain("-timeout", SourceArguments.InputArgs(url));
+        Assert.DoesNotContain("-rw_timeout", SourceArguments.InputArgs(url));
+        Assert.DoesNotContain("-rw_timeout", SourceArguments.ProbeArgs(url));
+    }
+
+    /// <summary>
+    /// ffmpeg takes microseconds. The conversion is culture-invariant because the one host that
+    /// would break — a comma-decimal locale — would produce a command line that fails on every
+    /// camera at once, and only there.
+    /// </summary>
+    [Fact]
+    public void The_deadline_is_written_in_invariant_microseconds()
+    {
+        List<string> args = [.. SourceArguments.ProbeArgs("rtsp://cam/stream")];
+        string value = args[args.IndexOf("-timeout") + 1];
+
+        Assert.Equal(
+            ((long)SourceArguments.ProbeTimeout.TotalMicroseconds).ToString(
+                System.Globalization.CultureInfo.InvariantCulture),
+            value);
+        Assert.DoesNotContain(',', value);
+        Assert.DoesNotContain('.', value);
     }
 
     [Theory]

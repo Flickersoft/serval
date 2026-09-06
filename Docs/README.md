@@ -20,6 +20,7 @@ television and have a public HTTPS endpoint. Everything else below is the engine
 | [live-view.md](live-view.md) | WebRTC via go2rtc, two-way talk-back, and ONVIF PTZ |
 | [configuration.md](configuration.md) | The three configuration tiers, the list-binding trap, the environment-only keys, and the CameraModule's settings |
 | [deployment.md](deployment.md) | Docker, the quickstart compose, the deployment examples, GPU offload, and logs |
+| [memory.md](memory.md) | What a camera costs, why an Intel host accounts the vision model as shared memory, and what the 90% warning is actually measuring |
 | [rk3588.md](rk3588.md) | Orange Pi 5 deployment and NPU vision |
 | [coral.md](coral.md) | Server deployment with Coral Edge TPUs: object detection on an accelerator, bring-up, and the failure modes |
 | [google-home.md](google-home.md) | Putting the cameras on a Nest Hub or a television: what it needs first, what leaves your network, and what to expose |

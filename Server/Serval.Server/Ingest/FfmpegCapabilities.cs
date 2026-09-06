@@ -61,7 +61,7 @@ public sealed class FfmpegCapabilities
             output = process.StandardOutput.ReadToEnd();
             if (!process.WaitForExit((int)timeout.TotalMilliseconds))
             {
-                try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+                ChildProcess.Kill(process);
                 throw new FfmpegUnavailableException(
                     $"'{ffmpegPath} -encoders' did not finish within {timeout.TotalSeconds:0}s.");
             }

@@ -443,10 +443,7 @@ public sealed class ClipExporter
 
     private async Task CleanUpAsync(Export export)
     {
-        if (!export.Process.HasExited)
-        {
-            try { export.Process.Kill(entireProcessTree: true); } catch { /* already gone */ }
-        }
+        ChildProcess.Kill(export.Process, _logger);
 
         // Both are already awaited on the happy path; awaiting again is free. This is for the path
         // where the destination went away: the feed is writing into a pipe whose process we just
@@ -556,19 +553,23 @@ public sealed class ClipExporter
             startInfo.ArgumentList.Add(arg);
         }
 
+        Process? probe = null;
         try
         {
-            using Process? probe = Process.Start(startInfo);
+            probe = Process.Start(startInfo);
             if (probe is null)
             {
                 return null;
             }
 
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(ChildProcess.HelperTimeout);
+
             // Both pipes are read before waiting: a process that fills one while nobody drains it
             // blocks forever.
-            Task<string> output = probe.StandardOutput.ReadToEndAsync(cancellationToken);
-            Task<string> errors = probe.StandardError.ReadToEndAsync(cancellationToken);
-            await probe.WaitForExitAsync(cancellationToken);
+            Task<string> output = probe.StandardOutput.ReadToEndAsync(deadline.Token);
+            Task<string> errors = probe.StandardError.ReadToEndAsync(deadline.Token);
+            await probe.WaitForExitAsync(deadline.Token);
 
             string streams = (await output).Trim();
             await errors;
@@ -577,10 +578,23 @@ public sealed class ClipExporter
                 ? string.Join(" | ", streams.Split('\n').Select(l => l.Trim()))
                 : null;
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("Gave up reading the stream layout of {Init}.", initPath);
+            return null;
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Could not read the stream layout of {Init}.", initPath);
             return null;
+        }
+        finally
+        {
+            if (probe is not null)
+            {
+                ChildProcess.Kill(probe, _logger);
+                probe.Dispose();
+            }
         }
     }
 

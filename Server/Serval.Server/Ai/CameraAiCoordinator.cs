@@ -534,9 +534,22 @@ public sealed class CameraAiCoordinator : BackgroundService
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                // Asked for the same reason the detect reader asks: re-subscribing cannot conjure
+                // snapshots nobody is writing, so rebuilding this half alone would time out again
+                // at every idle period, forever. The request reaches a session only where one is
+                // registered, which is exactly the camera whose snapshots come from a detect
+                // session of its own — a camera served by its recording session registers nothing
+                // and keeps that session, which its own watchdog is already covering.
+                //
+                // For a camera running descriptions with object detection off this is the only
+                // path to ingest there is, because the detect reader that would otherwise carry it
+                // is never started.
                 _logger.LogWarning(
-                    "Camera {CameraId}: no snapshot for {Seconds:0}s; restarting its AI session.",
+                    "Camera {CameraId}: no snapshot for {Seconds:0}s; restarting its AI session "
+                    + "and asking its ingest session to restart.",
                     camera.Id, idleTimeout.TotalSeconds);
+
+                _detectRestarts.Request(camera.Id);
                 return;
             }
 

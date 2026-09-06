@@ -249,10 +249,7 @@ public sealed class CastTranscoder
         }
         finally
         {
-            if (!process.HasExited)
-            {
-                try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
-            }
+            ChildProcess.Kill(process, _logger);
 
             // The viewer seeking away closes the response mid-copy, which leaves the feed writing
             // into a pipe whose process has just been killed. Somebody has to observe that.

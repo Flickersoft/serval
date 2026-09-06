@@ -165,7 +165,8 @@ size retention to the disk. As anchors from real deployments: six cameras record
 streams write roughly 300–400 GB a day — seven days needs about 2.5 TB; sub-stream-only
 recording is orders of magnitude less. MongoDB stays small but wants IOPS — on a multi-disk
 host put it on the fast disk and the media on the big one. Memory: ~2 GB recording-only, 8–10 GB
-with the full AI stack loaded.
+with the full AI stack loaded — budget ~300 MB per camera on top of the models, and see
+[Docs/memory.md](Docs/memory.md) for the measurements and the host-level arithmetic.
 
 ## Security model
 
