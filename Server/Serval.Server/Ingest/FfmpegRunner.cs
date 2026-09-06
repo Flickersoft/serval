@@ -106,13 +106,9 @@ internal static class FfmpegRunner
         finally
         {
             // ffmpeg exited, stalled, or we were cancelled — stop the helper loops and the process
-            // tree. Kill is a SIGKILL on Linux, which is what a wedged ffmpeg needs: it never
-            // reaches the handler a polite signal would rely on.
+            // tree.
             linked.Cancel();
-            if (!process.HasExited)
-            {
-                try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
-            }
+            ChildProcess.Kill(process, logger);
 
             await Task.WhenAll(running.Select(Swallow));
         }

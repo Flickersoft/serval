@@ -179,29 +179,46 @@ public sealed class ClipMedia
             startInfo.ArgumentList.Add(arg);
         }
 
+        Process? process = null;
         try
         {
-            using Process process = Process.Start(startInfo)
+            process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Could not start ffmpeg to sample a frame.");
 
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(ChildProcess.HelperTimeout);
+
             using var buffer = new MemoryStream();
-            Task copy = process.StandardOutput.BaseStream.CopyToAsync(buffer, cancellationToken);
-            Task<string> errors = process.StandardError.ReadToEndAsync(cancellationToken);
+            Task copy = process.StandardOutput.BaseStream.CopyToAsync(buffer, deadline.Token);
+            Task<string> errors = process.StandardError.ReadToEndAsync(deadline.Token);
 
             await copy;
             await errors;
-            await process.WaitForExitAsync(cancellationToken);
+            await process.WaitForExitAsync(deadline.Token);
 
             return process.ExitCode == 0 ? buffer.ToArray() : null;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogDebug("Gave up sampling a frame at {Offset}s from {Clip}.", offset, clipPath);
+            return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogDebug(ex, "Could not sample a frame at {Offset}s from {Clip}.", offset, clipPath);
             return null;
         }
+        finally
+        {
+            if (process is not null)
+            {
+                ChildProcess.Kill(process, _logger);
+                process.Dispose();
+            }
+        }
     }
 
-    private static async Task<(int ExitCode, string Output)> RunAsync(
+    private async Task<(int ExitCode, string Output)> RunAsync(
         string executable,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken,
@@ -222,13 +239,23 @@ public sealed class ClipMedia
         using Process process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Could not start {executable}.");
 
-        // Both pipes are read before waiting: a process that fills one while nobody drains it
-        // blocks forever, and ffmpeg is chatty on stderr.
-        Task<string> output = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        Task<string> errors = process.StandardError.ReadToEndAsync(cancellationToken);
+        try
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(ChildProcess.HelperTimeout);
 
-        await process.WaitForExitAsync(cancellationToken);
+            // Both pipes are read before waiting: a process that fills one while nobody drains it
+            // blocks forever, and ffmpeg is chatty on stderr.
+            Task<string> output = process.StandardOutput.ReadToEndAsync(deadline.Token);
+            Task<string> errors = process.StandardError.ReadToEndAsync(deadline.Token);
 
-        return (process.ExitCode, captureStandardOutput ? await output : await errors);
+            await process.WaitForExitAsync(deadline.Token);
+
+            return (process.ExitCode, captureStandardOutput ? await output : await errors);
+        }
+        finally
+        {
+            ChildProcess.Kill(process, _logger);
+        }
     }
 }

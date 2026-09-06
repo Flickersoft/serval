@@ -100,10 +100,7 @@ public sealed class FfmpegAudioSession
         {
             await linked.CancelAsync();
 
-            if (!process.HasExited)
-            {
-                try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
-            }
+            ChildProcess.Kill(process, _logger);
 
             try { await stderrPump; } catch { /* shutting down */ }
         }
@@ -145,11 +142,37 @@ public sealed class FfmpegAudioSession
         var bytes = new byte[ReadBufferBytes];
         var samples = new float[ReadBufferBytes / 2];
         int carry = 0;
+        TimeSpan stallTimeout = TimeSpan.FromSeconds(_options.StallTimeoutSeconds);
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            int read = await process.StandardOutput.BaseStream.ReadAsync(
-                bytes.AsMemory(carry, bytes.Length - carry), cancellationToken);
+            int read;
+
+            // Arriving bytes are the only sign this tap is alive: stdout carries the audio itself,
+            // so there is no progress stream to watch the way a recording session's is watched. A
+            // source that stops answering without closing delivers neither samples nor EOF, and the
+            // read would otherwise wait on it for as long as the process lives.
+            using (var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                if (stallTimeout > TimeSpan.Zero)
+                {
+                    idle.CancelAfter(stallTimeout);
+                }
+
+                try
+                {
+                    read = await process.StandardOutput.BaseStream.ReadAsync(
+                        bytes.AsMemory(carry, bytes.Length - carry), idle.Token);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // Ahead of the exit code, which reports the kill in the caller's finally rather
+                    // than the reason for it.
+                    throw new InvalidOperationException(
+                        $"ffmpeg audio for camera '{_camera.Id}' produced nothing for "
+                        + $"{stallTimeout.TotalSeconds:0}s and was killed.");
+                }
+            }
 
             if (read == 0)
             {

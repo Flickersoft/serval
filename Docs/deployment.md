@@ -173,7 +173,9 @@ desktop core — fine for a handful of cameras at 1 fps, but an N100-class box r
 cameras wants an accelerator: measured ~96 inferences/s on two USB Corals against an estimated
 10–13/s on the N100's four cores (see [coral.md](coral.md)). Scene description on CPU takes tens
 of seconds per description on small hosts; a GPU brings it down ([below](#server-side-ai-on-a-gpu)).
-Budget ~8–10 GB of container memory with everything on, against ~2 GB for recording only.
+Budget ~8–10 GB of container memory with everything on, against ~2 GB for recording only;
+[memory.md](memory.md) breaks that down per camera and per model, and explains why an Intel host
+accounts the offloaded vision model outside the process.
 
 ## Secrets
 

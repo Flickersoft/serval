@@ -245,6 +245,16 @@ public sealed class StreamIngestManager : BackgroundService
     private TimeSpan MaxBackoff => TimeSpan.FromSeconds(_options.CurrentValue.Ingest.MaxReconnectSeconds);
 
     /// <summary>
+    /// How long an attempt must last to count as having worked, and so to earn the next failure a
+    /// fresh base delay rather than the escalated one its predecessors built up.
+    ///
+    /// A fixed span rather than something derived from <see cref="MaxBackoff"/>: an operator who
+    /// raises the reconnect ceiling to an hour is asking for a longer wait between tries, not for
+    /// an hour of uptime before a camera is considered to have started successfully.
+    /// </summary>
+    private static readonly TimeSpan HealthyRun = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// The ingest settings a session is built from — those that reach a command line, and
     /// <see cref="IngestOptions.StallTimeoutSeconds"/>, which the session reads once when it arms
     /// its watchdog. Both are fixed for the life of a session, so both need one to restart before a
@@ -355,11 +365,13 @@ public sealed class StreamIngestManager : BackgroundService
                     ? _detectRestarts.Register(camera.Id, () => RequestStop(attempt))
                     : null;
 
+                DateTimeOffset startedAt = DateTimeOffset.UtcNow;
+                bool misconfigured = false;
+                Exception? fault = null;
+
                 try
                 {
                     await run(attempt.Token);
-                    // A clean exit resets the backoff.
-                    backoff = TimeSpan.FromSeconds(_options.CurrentValue.Ingest.ReconnectSeconds);
                 }
                 catch (OperationCanceledException) when (cts.IsCancellationRequested)
                 {
@@ -379,13 +391,11 @@ public sealed class StreamIngestManager : BackgroundService
                         "Camera {CameraId} {Role} stream cannot start: {Reason} This will not fix "
                         + "itself — edit the camera or the server configuration.",
                         camera.Id, role, ex.Message);
-                    backoff = MaxBackoff;
+                    misconfigured = true;
                 }
                 catch (Exception ex)
                 {
-                    sessionLogger.LogError(ex,
-                        "Camera {CameraId} {Role} stream failed; reconnecting in {Backoff}.",
-                        camera.Id, role, backoff);
+                    fault = ex;
                 }
 
                 // Reported here rather than from a catch, because a requested restart has two
@@ -394,17 +404,37 @@ public sealed class StreamIngestManager : BackgroundService
                 // the token it was handed is the one that stopped it — so the usual ending is a
                 // clean return, and the exception is only what a cancel before ffmpeg started
                 // produces.
-                //
-                // Neither is a fault or a dead source, so the backoff earned by whatever the
-                // session was doing before the request is dropped; this goes round again at the
-                // base delay.
                 if (attempt.IsCancellationRequested && !cts.IsCancellationRequested)
                 {
                     sessionLogger.LogInformation(
                         "Camera {CameraId} {Role} stream restarting: its frames stopped reaching "
                         + "the AI session.",
                         camera.Id, role);
+                }
+
+                // Uptime is what earns a reset, not how the attempt ended. A session that carried
+                // frames for a while and then lost its reader has proved the source is there and
+                // should come straight back; one that ended in seconds has proved nothing, however
+                // it ended.
+                //
+                // The ending cannot be the test because the AI half asks for a restart every ten
+                // seconds for as long as its frames are missing, which is exactly the state a
+                // camera that cannot start at all is in. Counting those as successes would pin the
+                // backoff at its base delay and retry a dead camera every few seconds forever.
+                if (misconfigured)
+                {
+                    backoff = MaxBackoff;
+                }
+                else if (DateTimeOffset.UtcNow - startedAt >= HealthyRun)
+                {
                     backoff = TimeSpan.FromSeconds(_options.CurrentValue.Ingest.ReconnectSeconds);
+                }
+
+                if (fault is not null)
+                {
+                    sessionLogger.LogError(fault,
+                        "Camera {CameraId} {Role} stream failed; reconnecting in {Backoff}.",
+                        camera.Id, role, backoff);
                 }
 
                 try

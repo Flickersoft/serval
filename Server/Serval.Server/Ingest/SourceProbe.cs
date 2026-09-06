@@ -17,8 +17,12 @@ internal sealed record VideoProbe(string? Codec, int? Width, int? Height);
 /// </summary>
 internal static class SourceProbe
 {
-    /// <summary>How long a wedged source is given before its probe is abandoned.</summary>
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
+    /// <summary>
+    /// How long a wedged source is given past the deadline ffprobe was handed before it is
+    /// abandoned and killed. The margin is what makes the usual failure ffprobe's own error, with a
+    /// reason attached, rather than a kill that reports nothing about the source.
+    /// </summary>
+    private static readonly TimeSpan Timeout = SourceArguments.ProbeTimeout + TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Codec and dimensions in one call, since a second ffprobe means a second chance to stall on a
@@ -85,29 +89,44 @@ internal static class SourceProbe
             startInfo.ArgumentList.Add(arg);
         }
 
+        Process? probe = null;
         try
         {
-            using var probe = Process.Start(startInfo);
+            probe = Process.Start(startInfo);
             if (probe is null)
             {
                 return [];
             }
 
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(Timeout);
+            using var abandon = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            abandon.CancelAfter(Timeout);
 
-            string output = await probe.StandardOutput.ReadToEndAsync(timeout.Token);
-            await probe.WaitForExitAsync(timeout.Token);
+            // Both pipes are read before waiting: a process that fills one while nobody drains it
+            // blocks in write() forever, which is a hang no timeout on the source can end.
+            Task<string> output = probe.StandardOutput.ReadToEndAsync(abandon.Token);
+            Task<string> errors = probe.StandardError.ReadToEndAsync(abandon.Token);
+            await probe.WaitForExitAsync(abandon.Token);
+
+            string fields = await output;
+            await errors;
 
             // One value per line, in the order asked for. Blank lines are kept so a missing middle
             // field cannot shift the ones after it into the wrong slots.
-            return output.ReplaceLineEndings("\n").TrimEnd('\n').Split('\n');
+            return fields.ReplaceLineEndings("\n").TrimEnd('\n').Split('\n');
         }
         catch (Exception ex)
         {
             logger.LogWarning(
                 ex, "ffprobe ({Stream}) failed for camera {CameraId}.", streamSpecifier, cameraId);
             return [];
+        }
+        finally
+        {
+            if (probe is not null)
+            {
+                ChildProcess.Kill(probe, logger);
+                probe.Dispose();
+            }
         }
     }
 }

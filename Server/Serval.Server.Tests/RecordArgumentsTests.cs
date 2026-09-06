@@ -279,4 +279,16 @@ public class RecordArgumentsTests
         // capping them would slow the recording down to buy latency nobody is waiting on.
         Assert.DoesNotContain("-threads", Build(Spec(Transcode(), snapshot: true, detect: Detect())));
     }
+
+    [Fact]
+    public void The_sources_deadline_binds_to_the_input()
+    {
+        // After -i it binds to no input and the recording keeps the behaviour it was set to avoid:
+        // a camera that stops answering without closing its socket, and an ffmpeg blocked on it for
+        // as long as the process lives.
+        List<string> args = Build(Spec(Copy()));
+
+        Assert.True(args.IndexOf("-timeout") >= 0);
+        Assert.True(args.IndexOf("-timeout") < args.IndexOf("-i"));
+    }
 }
