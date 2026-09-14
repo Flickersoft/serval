@@ -251,7 +251,11 @@ public static class ClipEndpoints
             SavedClip? clip = await clips.GetAsync(id, ct);
             string path = storage.PosterFor(id);
 
-            if (clip is not { State: ClipState.Ready } || !File.Exists(path))
+            // Length rather than existence, for the reason on the alert poster route: a zero-byte
+            // file is one ffmpeg created and never put a frame in, and the dialog draws a broken
+            // picture rather than the empty box it has a shape for.
+            if (clip is not { State: ClipState.Ready }
+                || new FileInfo(path) is not { Exists: true, Length: > 0 })
             {
                 return Results.NotFound();
             }

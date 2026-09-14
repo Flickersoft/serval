@@ -103,6 +103,20 @@ public sealed class PushOptions
     public int MaxFailures { get; set; } = 10;
 
     /// <summary>
+    /// How long the credential in a notification's picture URL is good for. Hours, where every other
+    /// URL-borne token in the system is minutes, because a notification sits in a tray and its
+    /// picture may be drawn long after it was delivered — and a stream token's ten minutes expires
+    /// against <see cref="TtlSeconds"/> alone, which is why notifications arrive with no image.
+    ///
+    /// <para>It only has to comfortably exceed <see cref="TtlSeconds"/>, since a browser fetches the
+    /// image when the notification is shown. A day is for the redraw after a reboot, and is
+    /// affordable only because the token opens one alert's poster and nothing else — see
+    /// <c>TokenService.CreateAlertImageToken</c>. A JWT cannot be revoked, so this is the whole
+    /// bound on a leaked one; an hour costs nothing if that trade ever reads wrong.</para>
+    /// </summary>
+    public int ImageTokenHours { get; set; } = 24;
+
+    /// <summary>
     /// How long a camera is left alone after interrupting somebody about one thing, before it may
     /// interrupt them about that same thing again. What a person inherits until they set their own
     /// on <c>CameraNotificationRule.CooldownSeconds</c>; zero sends every alert.

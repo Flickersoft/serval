@@ -135,6 +135,17 @@ public sealed class AlertService
             if (_snapshots.Latest(alert.CameraId) is { } snapshot)
             {
                 _clips.EnqueuePoster(alert.Id, snapshot.Jpeg);
+
+                // How far this stand-in is from the frame that actually fired. Both stamps are on
+                // the same frame clock — FfmpegSnapshotSession hands one session anchor to
+                // SnapshotWatcher and DetectFrameReader alike — so the difference is real rather
+                // than two clocks disagreeing. It should be about a second, since snapshots are
+                // published at Ingest:SnapshotFps while detection runs at Detection:DetectFps; a
+                // consistently larger number is the thing to chase before anything else here.
+                _logger.LogDebug(
+                    "Alert {AlertId} on camera {CameraId}: its stand-in poster is {Age:0.##}s "
+                    + "before the frame it fired on.",
+                    alert.Id, alert.CameraId, (alert.PeakAt - snapshot.CapturedAt).TotalSeconds);
             }
 
             // Published straight away, without waiting for the clip. The queue's job is to be

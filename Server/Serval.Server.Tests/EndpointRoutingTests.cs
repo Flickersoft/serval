@@ -107,10 +107,10 @@ public class EndpointRoutingTests
         Assert.Equal(
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                // Fetched by the browser as a notification's picture, with the token in the URL
-                // that AlertNotifier.Compose puts there — see the Push notifications section of
-                // Docs/alerts.md. The App fetches the same route with a header, which is what hid
-                // this for as long as the notification was the only caller that could not.
+                // The App's dashboard tile paints from this, and the wall's <img> is handed a URL
+                // and nothing else. A notification's picture used to come from here too, which is
+                // how the route came to be on this policy at all; it is the alert's own poster now,
+                // for the reason given on AlertNotifier.Compose.
                 ["/api/cameras/{id}/snapshot.jpg"] = "MediaAccess",
 
                 // Fetched by hls.js and libmpv, which are handed a URL and nothing else.
@@ -132,23 +132,72 @@ public class EndpointRoutingTests
     /// <summary>
     /// The same question for the two alert routes a player or a browser fetches by URL.
     ///
-    /// <c>poster.jpg</c> is the one that matters here: it is an <c>Image.network</c> in the App, so
-    /// it carries a stream token and nothing else, and it is fetched for every row in the queue.
+    /// <para><c>poster.jpg</c> is the one that matters here, and it is the only route on
+    /// <c>AlertImageAccess</c> — which is <c>MediaAccess</c> minus the refusal of an alert image
+    /// token. That policy admits; <em>which</em> alert the token names is compared in the handler,
+    /// which has the id. A second route joining it would have to make that comparison too, and
+    /// failing this test is how its author finds out.</para>
+    ///
+    /// <para>It is also an <c>Image.network</c> in the App, so it carries a stream token and nothing
+    /// else, and it is fetched for every row in the queue.</para>
     /// </summary>
     [Fact]
     public void AlertMediaRoutesTakeAStreamToken()
     {
         IReadOnlyList<Endpoint> endpoints = Materialize(app => app.MapAlertEndpoints());
 
-        string[] streamed = [.. endpoints
+        Dictionary<string, string> policies = endpoints
             .OfType<RouteEndpoint>()
-            .Where(e => e.Metadata.GetMetadata<IAuthorizeData>()?.Policy == "MediaAccess")
-            .Select(e => $"/{e.RoutePattern.RawText?.TrimStart('/')}")
-            .Order(StringComparer.Ordinal)];
+            .Where(e => e.Metadata.GetMetadata<IAuthorizeData>()?.Policy
+                is "MediaAccess" or "AlertImageAccess")
+            .ToDictionary(
+                e => $"/{e.RoutePattern.RawText?.TrimStart('/')}",
+                e => e.Metadata.GetMetadata<IAuthorizeData>()!.Policy!,
+                StringComparer.Ordinal);
 
         Assert.Equal(
-            ["/api/alerts/{id}/clip.mp4", "/api/alerts/{id}/poster.jpg"],
-            streamed);
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["/api/alerts/{id}/clip.mp4"] = "MediaAccess",
+                ["/api/alerts/{id}/poster.jpg"] = "AlertImageAccess",
+            },
+            policies);
+    }
+
+    /// <summary>
+    /// That the URL on a push notification's picture actually addresses a route this server serves.
+    ///
+    /// <para>This is the failure that motivated the whole change, and its shape is worth keeping in
+    /// mind: the notifier pointed at <c>/api/cameras/{id}/snapshot.jpg</c> with an <c>&amp;at=</c>
+    /// parameter that read like a frame selector and was bound by nothing. Every part of that
+    /// resolved — the route existed, the token was valid, a JPEG came back — so no test and no log
+    /// line said anything. It was simply the wrong picture, and only a person looking at their phone
+    /// could tell.</para>
+    ///
+    /// <para>So this pins the notifier's URL against the route table rather than against a literal:
+    /// a route renamed or a query parameter invented on one side and not the other fails here.</para>
+    /// </summary>
+    [Fact]
+    public void TheNotificationPictureAddressesTheAlertPosterRoute()
+    {
+        string url = AlertNotifier.ImageUrl("alert-1", "the-token");
+
+        string path = url.Split('?')[0];
+        string query = url.Split('?')[1];
+
+        IReadOnlyList<Endpoint> endpoints = Materialize(app => app.MapAlertEndpoints());
+
+        RouteEndpoint poster = endpoints
+            .OfType<RouteEndpoint>()
+            .Single(e => e.RoutePattern.RawText == "/api/alerts/{id}/poster.jpg");
+
+        // The literal id substituted into the route's own pattern — so a rename on either side
+        // stops these agreeing.
+        Assert.Equal(poster.RoutePattern.RawText!.Replace("{id}", "alert-1"), path);
+
+        // Exactly one parameter, and it is the one the "StreamToken" scheme reads in Program.cs.
+        // The dead "at" is gone; anything else appearing here is a parameter nothing binds.
+        Assert.Equal("stream_token=the-token", query);
     }
 
     /// <summary>

@@ -449,6 +449,13 @@ public static class SettingsCatalog
             + "device is still real. The App re-registers on next launch either way.",
             SettingKind.Int, Min: 1, Max: 1000, Unit: "failures", Advanced: true),
 
+        new("Serval:Push:ImageTokenHours", GroupNotifications, "Notification picture link lasts",
+            "How long the picture on a notification can still be loaded. A browser fetches it "
+            + "itself, with a credential in the URL, and it may do so long after the notification "
+            + "arrived — too short and notifications show up with no picture. Longer is affordable "
+            + "here because that credential opens one alert's picture and nothing else.",
+            SettingKind.Int, Min: 1, Max: 168, Unit: "hours", Advanced: true),
+
         // ---- Sessions -------------------------------------------------------------------------
         new("Serval:Auth:AccessTokenMinutes", GroupSessions, "Access token lifetime",
             "How long a signed-in session's token is good for before it silently renews. Short on "

@@ -230,7 +230,7 @@ by default — the difference from every telemetry route, which is per-camera.
 | `POST /api/alerts/{id}/dismiss` | |
 | `POST /api/alerts/dismiss-all?cameraId=` | |
 | `GET /api/alerts/{id}/clip.mp4` | range-served; `MediaAccess`, so a `<video>` can use `?stream_token=` |
-| `GET /api/alerts/{id}/poster.jpg` | the frame it fired on |
+| `GET /api/alerts/{id}/poster.jpg` | the frame it fired on; `AlertImageAccess`, which also takes the one-alert token a notification's picture carries |
 
 `unread` counts the whole queue rather than the page, so the header's figure stays true when the
 rest is below the fold.
@@ -295,8 +295,15 @@ detection box floating on it, which is what a tapped notification looked like ev
 So the poster no longer waits for the clip. `AlertService.RaiseAsync` reads
 `SnapshotBroadcaster.Latest` — already encoded, already in memory — and hands it to
 `AlertClipWorker.EnqueuePoster`, which writes it to the alert's poster path. `AlertClipWorker` then
-overwrites it with the exact detection frame when the clip settles. Four consequences worth
-knowing:
+overwrites it with the exact detection frame when the clip settles — **unless the two clocks
+disagree**. `posterAt` is `peak_at` minus the clip's first segment start, and those come from
+different anchors; `PreviewRing` re-anchoring off the wall clock after a segment gap makes the
+subtraction negative, which `ClipMedia` used to clamp to zero. That silently made the poster frame
+zero of the clip — `AlertPreRollSeconds` *before* the detection — on the one route whose whole
+promise is "the frame it fired on". An offset outside the clip now logs and keeps the stand-in
+instead: an approximate frame from the right moment beats an exact frame from the wrong one.
+
+Four more consequences worth knowing:
 
 - **`poster.jpg` is gated on the file, not on `clip_state`.** Gating on `Ready` would 404 the
   stand-in for the whole window it exists to cover. It also means an `Unavailable` alert — one there
@@ -319,6 +326,15 @@ clip settles. The exact fix is to encode the `DetectFrame` the detector actually
 memory at the raise; it is not done because that is a JPEG encode next to the detection loop, and
 that loop is the one thing nothing may slow down.
 
+How far off it actually is now gets logged rather than argued about: `AlertService` records
+`peak_at` minus the snapshot's `CapturedAt` at debug on every raise. Both stamps come from one
+session anchor — `FfmpegSnapshotSession` hands the same one to `SnapshotWatcher` and
+`DetectFrameReader` — so the number is a real gap and not two clocks disagreeing. About a second is
+expected, since snapshots are published at `Ingest:SnapshotFps` while detection runs at
+`Detection:DetectFps`. Consistently more than that is worth chasing before anything else here, and
+the cheap answer would be for `SnapshotBroadcaster` to keep a couple of recent frames per camera so
+the raise can pick the one nearest `peak_at` instead of the newest.
+
 ### The screen a notification lands on updates itself
 
 A tap arrives about a second after the raise, so `AlertScreen` opens on an alert whose clip is still
@@ -340,19 +356,62 @@ instead would see every alert twice — once on raise, again when the clip settl
 slot in a bounded channel and returns; the caller is the detection loop and nothing may make it
 wait.
 
-**The picture is the camera's live snapshot, not the alert's poster.** `poster.jpg` is cut from
-footage that does not exist yet — it 404s until the clip settles, some sixteen seconds later —
-while the push goes out at the moment of the raise. `/api/cameras/{id}/snapshot.jpg` is served from
-memory and is within a second or two of the frame that fired. Browsers fetch a notification's image
-themselves with no `Authorization` header available to them, so the URL carries a per-recipient
+**The picture is the alert's own poster.** It was the camera's live snapshot for a while, on the
+grounds that `poster.jpg` is cut from footage that does not exist yet and 404s until the clip
+settles. That stopped being true the moment the provisional poster landed — see *The poster arrives
+before the clip* above — and the difference is not cosmetic.
+
+`snapshot.jpg` serves whatever the camera is showing **when the browser fetches it**, and a browser
+fetches a notification's image when the notification is drawn rather than when it was composed. So
+every second of delivery lag moved the picture further from the thing being reported, usually onto
+an empty scene — a notification about nothing, which is exactly what it looks like. A poster is
+fixed to its alert: a late delivery is still the right picture, and one drawn after the clip settles
+is the exact frame the detection fired on.
+
+Browsers fetch that image with no `Authorization` header available to them, so the URL carries a
 `?stream_token=`; it rides inside the encrypted payload and the push service relaying it sees
 nothing.
 
-That token only works because `snapshot.jpg` is on the `MediaAccess` policy, which is the one thing
-about this route that is not obvious from reading it — it was on the default policy at first, which
-does not look at the query string at all, and the App's own calls set a header and so never noticed.
-`EndpointRoutingTests.MediaRoutesTakeAStreamToken` pins the policy of every media route for that
-reason.
+**That token is not an ordinary stream token, and it cannot be.** A stream token lives
+`Auth:AccessTokenMinutes` — ten — while `Push:TtlSeconds` is 600, so a message a push service held
+for a sleeping phone was routinely fetched with a credential that had already expired. The
+notification then showed no picture at all, which is the whole of the "sometimes there is no image"
+complaint. Making a *general* stream token last a day would hand out a day of access to every media
+route on the deployment.
+
+So `TokenService.CreateAlertImageToken` mints one carrying an extra `alert` claim naming the single
+alert it may fetch, and `Serval:Push:ImageTokenHours` (default 24) sets its life. Two halves enforce
+it, and both are needed:
+
+* `MediaAccess` **refuses** any principal carrying an `alert` claim. Central, so a route added to
+  that policy later cannot silently start accepting one.
+* `AlertImageAccess` — that policy minus the refusal — admits, and `poster.jpg`'s handler compares
+  the claim against the id it already binds. It answers **404** on a mismatch rather than 403: the
+  one thing a one-alert token's holder must not learn is which other alert ids exist, and the route
+  already answers the same way for a poster that is not there.
+
+The comparison is in the handler rather than in the policy for two reasons. A policy would have to
+read the route value off `AuthorizationHandlerContext.Resource`, which is the `HttpContext` only by
+a .NET 9 default that a single runtimeconfig switch reverts; and a policy cannot answer 404, which is
+the answer this route owes a token asking about somebody else's alert.
+`EndpointRoutingTests.AlertMediaRoutesTakeAStreamToken` pins `AlertImageAccess` to exactly that one
+route, so a second route joining it fails a test and its author finds out that the comparison is
+per-handler.
+
+**Both policy bodies live in `Auth/MediaPolicies.cs`, not inline in `Program.cs`.** The refusal is
+the entire security boundary around a day-long credential, and if it were dropped nothing would
+break, no test would fail and no log line would appear — every media route would simply start
+accepting one. A rule stated in a top-level statement is a rule nothing in this project can reach, so
+the two bodies are a class `MediaPolicyTests` can build and evaluate against a real
+`IAuthorizationService`.
+
+It keeps `scope=stream` and adds a claim beside it rather than inventing a third scope *value*, and
+that is load-bearing: `Program.cs` tells its two bearer schemes apart with a boolean, so a token
+carrying some other scope reads as *not* a stream token, is refused by the `StreamToken` scheme and
+is **accepted by the default one** — a picture credential quietly becoming a full session. The same
+trap is written up at length on `CameraStreamTicketService`, which escaped it by not being a JWT;
+that was not available here, because an in-memory ticket dies on restart and a notification outlives
+one. What is given up is revocation, and the `alert` claim is the whole bound on that.
 
 **What the tap lands on is covered above** — see *The poster arrives before the clip* and *The screen
 a notification lands on updates itself*. Between them, a tapped notification opens on a real picture
@@ -418,10 +477,15 @@ else — and a filter over a field that does not exist is a control that cannot 
 
 ## Not built
 
-**A second notification when the clip settles.** The push fires on the raise and carries a live
-snapshot; the real poster and the playable clip arrive some seconds later, and no second push goes
-out to say so. Re-notifying on the same `tag` would replace the notification silently, but it
-doubles the volume for a picture almost nobody is still looking at.
+**A second notification when the clip settles.** The push fires on the raise, and the exact
+detection frame and the playable clip arrive some seconds later; no second push goes out to say so.
+Re-notifying on the same `tag` would replace the notification silently, but it doubles the volume
+for a picture almost nobody is still looking at.
+
+Less of a gap than it was. The image URL is the alert's poster rather than a live snapshot, so the
+picture *behind* it sharpens on its own when the clip settles — a notification the browser draws
+late gets the exact frame with no second push. What a delivered-and-drawn notification will not do
+is go back and re-fetch it.
 
 The wire is ready for it. The payload carries a `quiet` flag and `sw.js` reads it into `renotify`
 and `silent`, so a republish can update the card without interrupting anybody. Nothing sets it yet;

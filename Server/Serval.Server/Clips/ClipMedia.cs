@@ -68,20 +68,50 @@ public sealed class ClipMedia
                 ],
                 cancellationToken);
 
-            if (exitCode == 0 && File.Exists(posterPath))
+            // Existence is not enough. `-y` creates the output before ffmpeg knows whether it has a
+            // frame to put in it, so a seek that lands past the last frame leaves a **zero-byte
+            // file** and can still exit 0. That file then satisfies every `File.Exists` gate
+            // downstream and is served as an empty 200 — a broken picture on the alert card, and
+            // since the push notification's image is the alert's poster, a notification with no
+            // picture. Seen on a real deployment before this check existed.
+            if (exitCode == 0 && new FileInfo(posterPath) is { Exists: true, Length: > 0 })
             {
                 return true;
             }
 
-            _logger.LogWarning("Could not write a poster for {Clip}: ffmpeg exited {Code}. {Errors}",
+            _logger.LogWarning(
+                "Could not write a poster for {Clip}: ffmpeg exited {Code}. {Errors}",
                 clipPath, exitCode, errors);
+
+            // Leave nothing behind that looks like a picture. Deleting is what turns this into the
+            // 404 the callers already handle — a clip without a poster still plays, and an alert
+            // without one falls back to its camera's stripe.
+            TryDelete(posterPath);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Could not write a poster for {Clip}.", clipPath);
+            TryDelete(posterPath);
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Removes a poster ffmpeg left behind, best effort. A failure here is not worth reporting: the
+    /// caller is already on its failure path, and the size check above is what actually keeps an
+    /// empty file from being served.
+    /// </summary>
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception)
+        {
+            // Nothing useful to do. The next successful write overwrites it.
+        }
     }
 
     /// <summary>

@@ -124,7 +124,8 @@ public class WebPushEncryptionTests
     /// <summary>
     /// The notifier's real payload has to fit, with room to spare. Alert ids and camera ids are
     /// bounded in practice but not by anything structural, so this is the check that a title and a
-    /// stream token together stay far from the ceiling.
+    /// image token together stay far from the ceiling — and the image URL now carries an alert id
+    /// as well as a camera's, which is the longest this payload gets.
     /// </summary>
     [Fact]
     public void TheNotificationPayloadFitsComfortably()
@@ -135,7 +136,8 @@ public class WebPushEncryptionTests
             camera_id = new string('c', 64),
             title = "Person at Front door",
             body = "18:42:07",
-            image = "/api/cameras/front-door/snapshot.jpg?stream_token=" + new string('t', 800),
+            image = $"/api/alerts/{new string('a', 64)}/poster.jpg?stream_token="
+                + new string('t', 800),
             url = "/alerts/" + new string('a', 64),
             at = DateTimeOffset.UtcNow,
         });

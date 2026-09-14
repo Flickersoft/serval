@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using Serval.Server.Auth;
 using Serval.Server.Cameras;
 
 namespace Serval.Server.Alerts;
@@ -131,10 +133,29 @@ public static class AlertEndpoints
         // had a picture at the moment it fired.
         // No repository read either: the id is sanitised by AlertStorage on the way to a path, which
         // is where that check belongs, and the file existing is the whole question.
-        group.MapGet("/{id}/poster.jpg", (string id, AlertStorage storage) =>
+        group.MapGet("/{id}/poster.jpg", (string id, ClaimsPrincipal user, AlertStorage storage) =>
         {
+            // The one route an alert image token opens, and only for its own alert — see
+            // TokenService.CreateAlertImageToken. Every other credential carries no alert claim and
+            // passes straight through.
+            //
+            // Not found rather than forbidden: telling the holder of a one-alert token which other
+            // alert ids exist is the one thing this route must not do, and it already answers the
+            // same way for a poster that is not there, so the two cannot be told apart.
+            if (!TokenService.MayViewAlert(user, id))
+            {
+                return Results.NotFound();
+            }
+
+            // Length rather than existence. A zero-byte poster is one ffmpeg created and never put a
+            // frame in, and serving it is worse than serving nothing: the App draws a broken picture
+            // instead of falling back to the camera's stripe, and a push notification arrives with
+            // an empty image. ClipMedia no longer leaves one behind, but alerts raised before that
+            // fix still have theirs on disk.
             string path = storage.PosterFor(id);
-            return File.Exists(path) ? Results.File(path, "image/jpeg") : Results.NotFound();
+            return new FileInfo(path) is { Exists: true, Length: > 0 }
+                ? Results.File(path, "image/jpeg")
+                : Results.NotFound();
         })
             .WithSummary("The frame the alert fired on.")
             .WithDescription(
@@ -144,8 +165,10 @@ public static class AlertEndpoints
                 + "Present from the moment the alert is raised. Until the clip settles this is the "
                 + "camera's live snapshot from that moment, which is within a second of the frame "
                 + "that fired rather than exactly it; the `box` is measured against the exact one, "
-                + "so it can sit slightly off its subject until `clip_state` reaches `ready`.")
-            .RequireAuthorization("MediaAccess");
+                + "so it can sit slightly off its subject until `clip_state` reaches `ready`.\n\n"
+                + "This is also the picture on a push notification, which a browser fetches itself "
+                + "with a token in the URL that is good for this one alert and nothing else.")
+            .RequireAuthorization("AlertImageAccess");
     }
 
     /// <summary>
