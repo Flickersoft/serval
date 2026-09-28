@@ -38,7 +38,7 @@ dependencies:
   # as the saver: on web it is navigator.share, and a Linux desktop reports that it has no sheet.
   share_plus: ^13.3.0
   web_socket_channel: ^3.0.3
-  flutter_webrtc: ^1.5.2
+  flutter_webrtc: ^1.6.2+hotfix.3
 
   # Replay. The live view is WebRTC, but a recording is an HLS VOD playlist, which
   # `flutter_webrtc` cannot play — so the scrubber needs a second player.
@@ -49,11 +49,11 @@ dependencies:
   # `dart:js_interop` bindings for the `<video>` element the web player drives.
   web: ^1.1.0
   flutter_svg: ^2.3.0
-  flutter_secure_storage: ^11.0.0
+  flutter_secure_storage: ^11.2.0
 
   # Dependency injection, and nothing more ambitious than that — see lib/data/providers.dart for
   # what is and is not in the container, and why widgets/ stays prop-driven.
-  flutter_riverpod: ^3.4.2
+  flutter_riverpod: ^3.4.3
 
   # Real URLs on the web build: linkable routes, reload that lands where you were, a back button
   # that stays in the app. The route tree is in lib/router/.
@@ -77,7 +77,7 @@ dependencies:
   # of the file in memory at once. Web only, deliberately: the same call on native stages the
   # stream through a temporary file first, which for a 20 GB export is a second full write that
   # lib/media/saver_native.dart already avoids.
-  file_saver: ^0.4.0
+  file_saver: ^0.6.0
 
 dev_dependencies:
   flutter_test:
