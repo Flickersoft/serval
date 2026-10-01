@@ -14,6 +14,7 @@ public class SessionSegmentsTests
 {
     private static readonly DateTimeOffset Start = new(2026, 8, 4, 16, 13, 37, TimeSpan.Zero);
     private const string Stamp = "20260804-161337";
+    private const double Nominal = 4.0;
 
     private static string Playlist(params (string File, double Duration)[] segments)
     {
@@ -33,11 +34,16 @@ public class SessionSegmentsTests
     private static string Ours(int index) => $"seg-{Stamp}-{index:D5}.m4s";
     private static string Theirs(int index) => $"seg-20260804-142753-{index:D5}.m4s";
 
+    private static SessionSegments Session() => new(Stamp, Start, Nominal);
+
+    /// <summary>A single pass by a fresh session.</summary>
+    private static IReadOnlyList<(string FileName, DateTimeOffset StartsAt, double DurationSeconds)>
+        Resolve(string playlist) => Session().Advance(playlist, out _);
+
     [Fact]
     public void The_first_segment_of_a_session_starts_at_the_session_start()
     {
-        var resolved = SessionSegments.Resolve(
-            Playlist((Ours(0), 4.0), (Ours(1), 4.0)), Stamp, Start);
+        var resolved = Resolve(Playlist((Ours(0), 4.0), (Ours(1), 4.0)));
 
         Assert.Equal(Start, resolved[0].StartsAt);
         Assert.Equal(Start.AddSeconds(4), resolved[1].StartsAt);
@@ -48,8 +54,7 @@ public class SessionSegmentsTests
     {
         // Under `-c:v copy` ffmpeg cuts only at a keyframe the camera already sent, so a segment
         // is as long as the GOP made it. Assuming the target would drift every seek.
-        var resolved = SessionSegments.Resolve(
-            Playlist((Ours(0), 3.02), (Ours(1), 4.99), (Ours(2), 4.01)), Stamp, Start);
+        var resolved = Resolve(Playlist((Ours(0), 3.02), (Ours(1), 4.99), (Ours(2), 4.01)));
 
         // To the millisecond: summing doubles one at a time lands a tick off an all-at-once sum,
         // and a tick is not what this is about.
@@ -60,13 +65,13 @@ public class SessionSegmentsTests
     [Fact]
     public void A_previous_sessions_playlist_yields_nothing()
     {
-        // What is on disk when a session starts. `live.m3u8` is never deleted and `hls_list_size 0`
-        // keeps every segment the last run wrote, and ffmpeg does not overwrite it until its first
-        // segment closes — so this is the *normal* first read after a restart, not an edge case.
+        // What is on disk when a session starts: ffmpeg does not overwrite the last run's playlist
+        // until its own first segment closes — so this is the *normal* first read after a restart,
+        // not an edge case.
         string stale = Playlist(
             (Theirs(1568), 4.0), (Theirs(1569), 4.0), (Theirs(1570), 4.0));
 
-        Assert.Empty(SessionSegments.Resolve(stale, Stamp, Start));
+        Assert.Empty(Resolve(stale));
     }
 
     [Fact]
@@ -74,8 +79,7 @@ public class SessionSegmentsTests
     {
         // The offset counts the media *this* session has produced. Letting a foreign segment
         // advance it would misplace ours by exactly as much as indexing it would.
-        var resolved = SessionSegments.Resolve(
-            Playlist((Theirs(1570), 6285.0), (Ours(0), 4.0), (Ours(1), 4.0)), Stamp, Start);
+        var resolved = Resolve(Playlist((Theirs(1570), 6285.0), (Ours(0), 4.0), (Ours(1), 4.0)));
 
         Assert.Equal(2, resolved.Count);
         Assert.Equal(Ours(0), resolved[0].FileName);
@@ -87,8 +91,7 @@ public class SessionSegmentsTests
     public void A_session_whose_stamp_merely_shares_a_prefix_is_still_a_stranger()
     {
         // The separator matters: "seg-20260804-1613" must not swallow "seg-20260804-161337".
-        var resolved = SessionSegments.Resolve(
-            Playlist(($"seg-{Stamp}7-00000.m4s", 4.0), (Ours(0), 4.0)), Stamp, Start);
+        var resolved = Resolve(Playlist(($"seg-{Stamp}7-00000.m4s", 4.0), (Ours(0), 4.0)));
 
         Assert.Equal(Ours(0), Assert.Single(resolved).FileName);
     }
@@ -96,7 +99,56 @@ public class SessionSegmentsTests
     [Fact]
     public void An_empty_or_headers_only_playlist_is_not_an_error()
     {
-        Assert.Empty(SessionSegments.Resolve(Playlist(), Stamp, Start));
-        Assert.Empty(SessionSegments.Resolve(string.Empty, Stamp, Start));
+        Assert.Empty(Resolve(Playlist()));
+        Assert.Empty(Resolve(string.Empty));
+    }
+
+    [Fact]
+    public void A_segment_is_returned_by_one_pass_only()
+    {
+        // The playlist is re-read every couple of seconds and still lists what the last pass took.
+        SessionSegments session = Session();
+        session.Advance(Playlist((Ours(0), 4.0), (Ours(1), 4.0)), out _);
+
+        var resolved = session.Advance(
+            Playlist((Ours(0), 4.0), (Ours(1), 4.0), (Ours(2), 4.0)), out int estimated);
+
+        Assert.Equal(0, estimated);
+        Assert.Equal(Ours(2), Assert.Single(resolved).FileName);
+        Assert.Equal(Start.AddSeconds(8), resolved[0].StartsAt);
+    }
+
+    [Fact]
+    public void Starts_carry_across_a_window_that_no_longer_begins_at_zero()
+    {
+        // The recording playlist is bounded, so its first entry is soon well into the session.
+        // Summing only what it lists would restart the clock at the edge of the window.
+        SessionSegments session = Session();
+        session.Advance(Playlist((Ours(0), 3.02), (Ours(1), 4.99), (Ours(2), 4.01)), out _);
+
+        var resolved = session.Advance(Playlist((Ours(2), 4.01), (Ours(3), 5.5)), out int estimated);
+
+        Assert.Equal(0, estimated);
+        Assert.Equal(Ours(3), Assert.Single(resolved).FileName);
+        Assert.Equal(12.02, (resolved[0].StartsAt - Start).TotalSeconds, 3);
+    }
+
+    [Fact]
+    public void A_segment_the_window_dropped_unseen_is_still_indexed_at_the_nominal_length()
+    {
+        // Retention deletes only what the index names, so a segment missing from it would stay on
+        // disk for good. Its name follows from ffmpeg's counter; its duration left with the entry.
+        SessionSegments session = Session();
+        session.Advance(Playlist((Ours(0), 5.0)), out _);
+
+        var resolved = session.Advance(Playlist((Ours(3), 6.0), (Ours(4), 4.0)), out int estimated);
+
+        Assert.Equal(2, estimated);
+        Assert.Equal(new[] { Ours(1), Ours(2), Ours(3), Ours(4) }, resolved.Select(s => s.FileName));
+        Assert.Equal(Start.AddSeconds(5), resolved[0].StartsAt);
+        Assert.Equal(Nominal, resolved[0].DurationSeconds);
+        Assert.Equal(Start.AddSeconds(5 + (2 * Nominal)), resolved[2].StartsAt);
+        Assert.Equal(6.0, resolved[2].DurationSeconds);
+        Assert.Equal(Start.AddSeconds(5 + (2 * Nominal) + 6), resolved[3].StartsAt);
     }
 }

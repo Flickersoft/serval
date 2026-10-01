@@ -58,8 +58,8 @@ preview-{stamp}-00000.m4s             segments, pruned by ffmpeg
 
 `-c:v copy`, so it is a mux and not an encode: no decode, no encoder, a few hundred kilobytes a
 second off a 640×360 sub stream. `-hls_list_size` is set from `Ingest:PreviewBufferSeconds` and
-`hls_flags` carries **`delete_segments`** — the exact inverse of the recording output, which sets
-`hls_list_size 0` and omits the flag so nothing it writes is ever lost. Here ffmpeg owning the
+`hls_flags` carries **`delete_segments`** — the exact inverse of the recording output, which omits
+the flag so nothing it writes is ever lost. Here ffmpeg owning the
 pruning is the point: the ring is bounded at its source, so there is no janitor to write and no way
 for a camera to fill a disk with footage nobody asked to keep.
 

@@ -129,14 +129,35 @@ public class RecordArgumentsTests
     [Fact]
     public void Segments_are_never_deleted_by_the_muxer()
     {
-        // hls_list_size 0 and the absence of delete_segments are what let recordings outlive the
-        // playlist. If ffmpeg started pruning, the RetentionWorker's retention policy would be
-        // silently overridden by a much shorter one.
+        // The absence of delete_segments is what lets recordings outlive the playlist. If ffmpeg
+        // started pruning, the RetentionWorker's retention policy would be silently overridden by
+        // one fifteen minutes long.
+        List<string> args = Build(Spec(Copy()));
+
+        Assert.DoesNotContain(args, a => a.Contains("delete_segments", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_playlist_is_a_bounded_window_of_the_session()
+    {
+        // Zero means "list everything", and ffmpeg keeps a ~12 KB entry per listed segment for as
+        // long as the camera stays connected: ~265 MB a day, per camera, never given back.
         List<string> args = Build(Spec(Copy()));
 
         int index = args.IndexOf("-hls_list_size");
-        Assert.Equal("0", args[index + 1]);
-        Assert.DoesNotContain(args, a => a.Contains("delete_segments", StringComparison.Ordinal));
+        Assert.Equal(
+            (RecordArguments.PlaylistWindowSeconds / 4).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            args[index + 1]);
+    }
+
+    [Theory]
+    [InlineData(4.0, 225)]
+    [InlineData(6.0, 150)]
+    [InlineData(7.0, 129)]
+    [InlineData(0.0, 900)]
+    public void The_window_covers_at_least_its_seconds_whatever_the_segment_length(double seconds, int entries)
+    {
+        Assert.Equal(entries, RecordArguments.PlaylistEntries(seconds));
     }
 
     /// <summary>The snapshot output's filename pattern, wherever it appears in the arguments.</summary>

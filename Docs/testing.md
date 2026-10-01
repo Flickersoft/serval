@@ -63,8 +63,8 @@ correct build the two agree to within the measurement noise; a regression shows 
 offset between them.
 
 Restarting ffmpeg is the other case worth exercising, because the on-disk `live.m3u8` — which the
-recording index reads for segment ownership — outlives the run that
-wrote it and `hls_list_size 0` means it holds every segment that run produced. Kill ffmpeg, let the
+recording index reads for segment ownership — can outlive the run that
+wrote it, still listing that run's last fifteen minutes. Kill ffmpeg, let the
 supervisor restart it, then confirm the new session's first segment is labelled at its own start,
 that no segment's filename stamp disagrees with its `InitFileName`, and that
 `max(StartedAt + DurationSeconds)` is behind `now` rather than ahead of it.

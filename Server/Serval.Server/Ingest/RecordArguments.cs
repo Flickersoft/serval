@@ -46,6 +46,26 @@ internal sealed record DetectFramePlan(string Directory, double Fps, int Width, 
 /// </summary>
 internal static class RecordArguments
 {
+    /// <summary>
+    /// How much of the session the recording playlist lists. It is not how much is kept, because
+    /// ffmpeg deletes nothing here. It is only how far back the indexer can still read a segment's
+    /// real duration.
+    ///
+    /// It has to be finite because ffmpeg holds a ~12 KB entry in memory for every listed segment,
+    /// for the life of the process. Listing the whole session grows a recorder by ~265 MB a day on
+    /// a camera that never reconnects; fifteen minutes of 4-second segments is ~3 MB. The indexer
+    /// reads every couple of seconds and keeps what it read even when Mongo refuses it, so this only
+    /// has to outlast a pass that never ran at all.
+    /// </summary>
+    public const int PlaylistWindowSeconds = 900;
+
+    /// <summary>
+    /// <see cref="PlaylistWindowSeconds"/> as ffmpeg's segment count. The divisor is floored at the
+    /// settings catalog's one-second minimum, so a config file cannot shrink the window to nothing.
+    /// </summary>
+    public static int PlaylistEntries(double segmentSeconds) =>
+        (int)Math.Ceiling(PlaylistWindowSeconds / Math.Max(segmentSeconds, 1));
+
     public static IReadOnlyList<string> Build(RecordSpec spec)
     {
         var args = new List<string> { "-nostdin", "-hide_banner", "-loglevel", "warning" };
@@ -113,14 +133,14 @@ internal static class RecordArguments
         // HLS fMP4 output. Unlike the DASH muxer, this puts every mapped stream into one variant,
         // so each segment file holds video and audio together.
         //
-        // hls_list_size 0 keeps every segment in the playlist and, crucially, stops ffmpeg from
-        // deleting any — the RetentionWorker prunes by age instead, so recordings survive.
-        // delete_segments is deliberately absent from hls_flags for the same reason.
+        // The playlist is a sliding window (see PlaylistWindowSeconds), and delete_segments is
+        // deliberately absent from hls_flags: a segment leaving the window leaves ffmpeg's list and
+        // stays on disk. The RetentionWorker prunes by age instead, so recordings survive.
         args.AddRange([
             "-f", "hls",
             "-hls_segment_type", "fmp4",
             "-hls_time", seg,
-            "-hls_list_size", "0",
+            "-hls_list_size", PlaylistEntries(spec.SegmentSeconds).ToString(CultureInfo.InvariantCulture),
             "-hls_flags", "independent_segments",
             "-hls_fmp4_init_filename", spec.InitFileName,
             "-hls_segment_filename", $"seg-{spec.SessionStamp}-%05d.m4s",
