@@ -40,7 +40,9 @@ public class ClipMediaPosterTests : IDisposable
     }
 
     /// <summary>A stand-in ffmpeg. <paramref name="script"/> is the body; the output path ffmpeg
-    /// was given is the last argument, as <c>$@</c> in the shell sees it.
+    /// was given is its last argument, which the body reads as <c>$out</c>. The empty <c>for</c>
+    /// that sets it is the POSIX spelling — <c>/bin/sh</c> is dash on Debian and Ubuntu, and
+    /// <c>${@: -1}</c> is a bash expansion dash rejects before the body runs.
     ///
     /// <para>Marked linux-only so the mode call sits under a guard the analyzer can see — the same
     /// shape <c>DetectFrameReaderTests</c> uses, and these tests are shell-script-driven anyway.</para>
@@ -49,7 +51,7 @@ public class ClipMediaPosterTests : IDisposable
     private ClipMedia MediaRunning(string script)
     {
         string stub = Path.Combine(_dir, "fake-ffmpeg");
-        File.WriteAllText(stub, "#!/bin/sh\n" + script + "\n");
+        File.WriteAllText(stub, "#!/bin/sh\nfor out; do :; done\n" + script + "\n");
         File.SetUnixFileMode(
             stub,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -66,7 +68,7 @@ public class ClipMediaPosterTests : IDisposable
     public async Task A_poster_ffmpeg_left_empty_is_a_failure_and_is_not_left_on_disk()
     {
         // Exactly what was seen in the wild: the file exists, exit code is 0, size is zero.
-        ClipMedia media = MediaRunning(""": > "${@: -1}"; exit 0""");
+        ClipMedia media = MediaRunning(""": > "$out"; exit 0""");
 
         bool wrote = await media.TryWritePosterAsync(
             Path.Combine(_dir, "clip.mp4"), Poster, seekSeconds: 5,
@@ -80,7 +82,7 @@ public class ClipMediaPosterTests : IDisposable
     [SupportedOSPlatform("linux")]
     public async Task A_poster_with_a_frame_in_it_is_kept()
     {
-        ClipMedia media = MediaRunning("""printf 'jpegbytes' > "${@: -1}"; exit 0""");
+        ClipMedia media = MediaRunning("""printf 'jpegbytes' > "$out"; exit 0""");
 
         bool wrote = await media.TryWritePosterAsync(
             Path.Combine(_dir, "clip.mp4"), Poster, seekSeconds: 5,
@@ -100,7 +102,7 @@ public class ClipMediaPosterTests : IDisposable
     [SupportedOSPlatform("linux")]
     public async Task A_poster_from_a_failed_run_is_removed_even_when_it_has_bytes()
     {
-        ClipMedia media = MediaRunning("""printf 'partial' > "${@: -1}"; exit 1""");
+        ClipMedia media = MediaRunning("""printf 'partial' > "$out"; exit 1""");
 
         bool wrote = await media.TryWritePosterAsync(
             Path.Combine(_dir, "clip.mp4"), Poster, seekSeconds: 5,
