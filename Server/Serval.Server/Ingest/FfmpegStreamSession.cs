@@ -218,19 +218,24 @@ public sealed class FfmpegStreamSession
     /// keyframe the camera already sent, so a 10-second GOP against a 4-second target yields
     /// 10-second segments. An index assuming the target drifts six seconds per segment — half an
     /// hour of error within an hour of recording — putting every seek in the wrong place and pruning
-    /// by a timestamp that is not the segment's. <c>hls_list_size 0</c> keeps every segment of the
-    /// session in the playlist with its real <c>#EXTINF</c>, so start times accumulate exactly.
+    /// by a timestamp that is not the segment's. Every listed segment carries its real
+    /// <c>#EXTINF</c>, and <see cref="SessionSegments"/> sums them across passes, so start times
+    /// stay exact long after the window has slid past the session's first segment.
     ///
     /// A FileSystemWatcher is tempting and wrong: ffmpeg writes each segment as a <c>.tmp</c> then
-    /// renames it into place, so segments arrive as Renamed rather than Created events. The
-    /// in-memory <c>seen</c> set keeps the pass from re-hitting Mongo for what is already indexed.
+    /// renames it into place, so segments arrive as Renamed rather than Created events.
     ///
-    /// Which segments are *ours* is <see cref="SessionSegments.Resolve"/>'s business, and it is not
+    /// Reading and writing are separate on purpose. The playlist forgets a segment once the window
+    /// passes it, so a pass whose Mongo write fails must still have read what it could not store;
+    /// that waits in <c>pending</c> for the next pass rather than being read again.
+    ///
+    /// Which segments are *ours* is <see cref="SessionSegments.Advance"/>'s business, and it is not
     /// a formality: the playlist on disk when this starts is the previous run's.
     /// </summary>
     private async Task IndexSegmentsAsync(CancellationToken cancellationToken)
     {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var session = new SessionSegments(_sessionStamp, _sessionStart, _options.SegmentSeconds);
+        var pending = new Queue<RecordingSegment>();
         string playlistPath = Path.Combine(_cameraDir, "live.m3u8");
         var period = TimeSpan.FromSeconds(Math.Max(_options.SegmentSeconds / 2, 1));
         using var timer = new PeriodicTimer(period);
@@ -243,31 +248,38 @@ public sealed class FfmpegStreamSession
             // then adopt at the wrong times.
             try
             {
-                if (!File.Exists(playlistPath))
+                // Absent until ffmpeg writes it.
+                if (File.Exists(playlistPath))
                 {
-                    continue; // ffmpeg has not written it yet
-                }
+                    string playlist = await File.ReadAllTextAsync(playlistPath, cancellationToken);
+                    var resolved = session.Advance(playlist, out int estimated);
 
-                string playlist = await File.ReadAllTextAsync(playlistPath, cancellationToken);
-
-                foreach ((string fileName, DateTimeOffset startsAt, double duration) in
-                    SessionSegments.Resolve(playlist, _sessionStamp, _sessionStart))
-                {
-                    if (!seen.Add(fileName))
+                    foreach ((string fileName, DateTimeOffset startsAt, double duration) in resolved)
                     {
-                        continue;
-                    }
-
-                    await _recordings.AddIfNewAsync(
-                        new RecordingSegment
+                        pending.Enqueue(new RecordingSegment
                         {
                             CameraId = _camera.Id,
                             FileName = fileName,
                             InitFileName = _initFileName,
                             StartedAt = startsAt,
                             DurationSeconds = duration,
-                        },
-                        cancellationToken);
+                        });
+                    }
+
+                    if (estimated > 0)
+                    {
+                        _logger.LogWarning(
+                            "Camera {CameraId}: {Count} segment(s) left the playlist before they were "
+                            + "indexed. They are indexed at an assumed {Seconds}s each, so every later "
+                            + "start in this session is an estimate.",
+                            _camera.Id, estimated, _options.SegmentSeconds);
+                    }
+                }
+
+                while (pending.TryPeek(out RecordingSegment? segment))
+                {
+                    await _recordings.AddIfNewAsync(segment, cancellationToken);
+                    pending.Dequeue();
                 }
             }
             catch (OperationCanceledException)
@@ -292,7 +304,7 @@ public sealed class FfmpegStreamSession
     /// Removes the playlist left behind by whatever ran before this session.
     ///
     /// Best-effort: a playlist that cannot be deleted is not worth refusing to record over, because
-    /// <see cref="SessionSegments.Resolve"/> already declines to adopt segments that are not this
+    /// <see cref="SessionSegments.Advance"/> already declines to adopt segments that are not this
     /// session's. This narrows the window rather than being the guard.
     /// </summary>
     private void DeleteStalePlaylist()

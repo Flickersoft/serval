@@ -216,32 +216,56 @@ public sealed class AlertNotifier : BackgroundService
     }
 
     /// <summary>
-    /// The message body, encrypted per subscription but composed once per account — the stream
-    /// token in it is the account's, and every device of theirs may use the same one.
+    /// The message body, encrypted per subscription but composed once per account — the image token
+    /// in it is the account's, and every device of theirs may use the same one. It is scoped to this
+    /// alert as well, which is why it is minted here rather than once per run.
     /// </summary>
     private byte[] Compose(AlertResponse alert, string userId)
     {
-        // The picture is the camera's live snapshot rather than the alert's own poster, and the
-        // difference matters. The poster is cut from footage that does not exist yet: it 404s until
-        // the clip settles, some seconds after the alert. The snapshot is served from memory and is
-        // there now, within a second or two of the frame that fired — so the notification arrives
-        // with a picture instead of a broken one.
+        // The picture is the alert's own poster, which is the frame it fired on.
+        //
+        // It used to be the camera's live snapshot, on the grounds that the poster is cut from
+        // footage that does not exist yet and 404s until the clip settles. That stopped being true
+        // when AlertService began writing a provisional poster from the live snapshot at the raise —
+        // the file is there from the moment the alert is, and AlertClipWorker later replaces it with
+        // the exact detection frame.
+        //
+        // The distinction is not cosmetic. snapshot.jpg serves whatever the camera is showing *when
+        // the browser fetches it*, so every second of delivery lag moved the picture further from
+        // the thing being reported — usually onto an empty scene, which reads as a notification
+        // about nothing. A poster is fixed to its alert, so a late delivery is still the right
+        // picture, and a late enough one is the exact frame.
         //
         // Browsers fetch a notification's image themselves, with no Authorization header available
-        // to them, which is what the stream token in the URL is for. It rides inside the encrypted
-        // payload, so the push service relaying this never sees it.
-        var (streamToken, _) = _tokens.CreateStreamToken(userId, Role.Viewer);
+        // to them, which is what the token in the URL is for. It rides inside the encrypted payload,
+        // so the push service relaying this never sees it — and it opens this one alert's poster and
+        // nothing else, which is what lets it outlive the ten minutes a stream token gets. See
+        // TokenService.CreateAlertImageToken.
+        PushOptions push = _options.CurrentValue.Push;
+        var (imageToken, _) = _tokens.CreateAlertImageToken(
+            userId, alert.Id, TimeSpan.FromHours(Math.Clamp(push.ImageTokenHours, 1, 168)));
 
         return JsonSerializer.SerializeToUtf8Bytes(new NotificationPayload(
             Id: alert.Id,
             CameraId: alert.CameraId,
             Title: alert.Title,
             Body: alert.At.ToLocalTime().ToString("HH:mm:ss"),
-            Image: $"/api/cameras/{Uri.EscapeDataString(alert.CameraId)}/snapshot.jpg"
-                + $"?stream_token={Uri.EscapeDataString(streamToken)}&at={alert.At.ToUnixTimeSeconds()}",
+            Image: ImageUrl(alert.Id, imageToken),
             Url: $"/alerts/{Uri.EscapeDataString(alert.Id)}",
             At: alert.At));
     }
+
+    /// <summary>
+    /// Where a browser fetches the notification's picture.
+    ///
+    /// <para>Its own method so a test can pin it against the route <c>AlertEndpoints</c> actually
+    /// registers. This is the line that was wrong before — it addressed the camera's live snapshot,
+    /// with an <c>&amp;at=</c> that looked like it selected a frame and was read by nothing — and
+    /// nothing failed, because a URL that resolves to the wrong picture still resolves.</para>
+    /// </summary>
+    internal static string ImageUrl(string alertId, string imageToken) =>
+        $"/api/alerts/{Uri.EscapeDataString(alertId)}/poster.jpg"
+        + $"?stream_token={Uri.EscapeDataString(imageToken)}";
 
     private sealed record PendingNotification(AlertResponse Alert);
 }

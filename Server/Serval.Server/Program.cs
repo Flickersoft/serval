@@ -513,17 +513,21 @@ void ConfigureJwtBearer(JwtBearerOptions options, bool requireStreamScope)
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, o => ConfigureJwtBearer(o, requireStreamScope: false))
-    .AddJwtBearer("StreamToken", o => ConfigureJwtBearer(o, requireStreamScope: true));
+    .AddJwtBearer(MediaPolicies.StreamTokenScheme, o => ConfigureJwtBearer(o, requireStreamScope: true));
 
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("Admin", policy => policy.RequireRole(nameof(Role.Admin)))
-    // The 4 HLS routes in Media/MediaEndpoints.cs accept either credential: a normal Bearer call
-    // (curl, desktop debugging) or the ?stream_token= a browser player attaches, since it cannot
-    // set an Authorization header on a <video>/hls.js request. The query parameter is read by
+    // The media routes accept either credential: a normal Bearer call (curl, desktop debugging) or
+    // the ?stream_token= a browser attaches, since it cannot set an Authorization header on a
+    // <video>/hls.js request or on a notification's picture. The query parameter is read by
     // OnMessageReceived on the "StreamToken" scheme above.
-    .AddPolicy("MediaAccess", policy => policy
-        .AddAuthenticationSchemes(JwtBearerDefaults.AuthenticationScheme, "StreamToken")
-        .RequireAuthenticatedUser())
+    //
+    // Both bodies are in Auth/MediaPolicies.cs rather than inline here, because the difference
+    // between them is a security boundary — one refuses the alert image token, the other is the
+    // single place that accepts it — and a rule stated in a top-level statement is a rule no test
+    // in this project can reach. See MediaPolicyTests.
+    .AddPolicy("MediaAccess", MediaPolicies.ConfigureMediaAccess)
+    .AddPolicy("AlertImageAccess", MediaPolicies.ConfigureAlertImageAccess)
     // Any endpoint added later without an explicit policy fails closed (401) rather than
     // accidentally shipping open.
     .SetFallbackPolicy(new AuthorizationPolicyBuilder()

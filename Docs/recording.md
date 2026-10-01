@@ -56,6 +56,19 @@ the playlist's `#EXTINF` rather than assumed — a 10-second GOP against a 4-sec
 otherwise drift the recording index by six seconds per segment. Setting the camera's I-frame
 interval to `SegmentSeconds`, or a divisor of it, keeps segments the length they were asked to be.
 
+**The playlist is a window, not the archive.** `live.m3u8` lists only the last fifteen minutes of
+the session (`RecordArguments.PlaylistWindowSeconds`), and `delete_segments` is absent, so a segment
+leaving the window leaves ffmpeg's list and stays on disk for retention to prune. It cannot list the
+whole session, because ffmpeg keeps a ~12 KB entry in memory per listed segment for as long as the
+process lives. On a camera that never drops its connection, that is ~265 MB a day per recorder.
+
+The indexer therefore carries each segment's start forward in memory, in `SessionSegments`, instead
+of re-summing from the top of a playlist that no longer begins at zero. It reads before it writes,
+so a Mongo outage delays the index without losing a duration. A segment the window drops before any
+pass sees it is still indexed, because retention only deletes what the index names. It gets the
+nominal `SegmentSeconds` as its duration, and the session logs a warning that every later start is
+an estimate.
+
 ## Audio in recordings
 
 Set `RecordAudio` on a camera and its audio is muxed into the **same segment files** as the video:
@@ -223,9 +236,9 @@ is recording.
 
 Two things about it that matter when reading this file:
 
-* It is the one HLS output in Serval that **deletes what it wrote**. `hls_list_size` is finite and
-  `hls_flags` carries `delete_segments` — the exact inverse of the recording output above, where
-  both are set the other way precisely so recordings survive.
+* It is the one HLS output in Serval that **deletes what it wrote**. `hls_flags` carries
+  `delete_segments` — the exact inverse of the recording output above, which leaves it out
+  precisely so recordings survive.
 * It is never put in the recording index, and its filenames all begin `preview-`. That is what keeps
   the sweep below from seeing it and `MediaEndpoints` from serving it.
 

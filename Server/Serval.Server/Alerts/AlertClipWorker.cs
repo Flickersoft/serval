@@ -288,8 +288,36 @@ public sealed class AlertClipWorker : BackgroundService
         // The frame the detection fired on, which is the picture the box belongs to — offset from
         // where the clip actually starts rather than from where it was asked to, because segments
         // only cut on keyframes and the first one usually begins before the range.
+        //
+        // This is a subtraction across two clocks. PeakAt is on the detect session's frame clock;
+        // StartedAt comes from the ring or the recording index. They agree while one anchor dates
+        // both, and stop agreeing when PreviewRing re-anchors off the wall clock after a segment
+        // gap — it says as much in its own log line. An offset outside the clip means they have
+        // disagreed, and seeking anyway is worse than not: ClipMedia clamps a negative seek to zero,
+        // which silently makes the poster frame zero of the clip — AlertPreRollSeconds *before* the
+        // detection, on the one route whose whole promise is "the frame it fired on".
+        //
+        // So keep the provisional poster instead, which is an approximate frame from the right
+        // moment rather than an exact frame from the wrong one.
+        string poster = _storage.PosterFor(alert.Id);
         double posterAt = (alert.PeakAt - run[0].StartedAt).TotalSeconds;
-        await _media.TryWritePosterAsync(video, _storage.PosterFor(alert.Id), posterAt, cancellationToken);
+        bool inClip = posterAt >= 0 && posterAt <= seconds;
+
+        if (!inClip)
+        {
+            _logger.LogWarning(
+                "Alert {AlertId} on camera {CameraId}: its peak frame is {Offset:0.#}s into a "
+                + "{Seconds:0.#}s clip, so the clip's clock and the detection's disagree. Keeping "
+                + "the poster taken at the raise.",
+                alert.Id, alert.CameraId, posterAt, seconds);
+        }
+
+        // The second half of the condition is the case with nothing to keep — the camera had no
+        // snapshot at the raise — where a clamped frame from the clip still beats no picture.
+        if (inClip || !File.Exists(poster))
+        {
+            await _media.TryWritePosterAsync(video, poster, posterAt, cancellationToken);
+        }
 
         await SettleAsync(alert.Id, AlertClipState.Ready, seconds, null, cancellationToken, recorded);
 

@@ -16,6 +16,11 @@ namespace Serval.Server.Auth;
 /// signing key; it is <c>Program.cs</c>'s two named JWT bearer schemes that actually tell them
 /// apart, by requiring the "stream" claim on one scheme and rejecting it on the other.
 ///
+/// A third kind rides the stream scheme rather than adding a scheme of its own: an alert image
+/// token, which is a stream token carrying an extra claim naming the single alert whose poster it
+/// may fetch — see <see cref="CreateAlertImageToken"/> for why it is longer-lived and narrower than
+/// everything else here.
+///
 /// The one-time WebSocket connect ticket is deliberately not a JWT — see
 /// <see cref="StreamTicketService"/> — since it needs server-side single-use enforcement a JWT
 /// cannot provide on its own.
@@ -24,6 +29,12 @@ public sealed class TokenService
 {
     public const string ScopeClaimType = "scope";
     public const string StreamScope = "stream";
+
+    /// <summary>
+    /// Names the one alert whose picture a token may fetch. Present only on an alert image token;
+    /// its absence is what makes every other credential unrestricted.
+    /// </summary>
+    public const string AlertClaimType = "alert";
 
     private readonly IOptionsMonitor<ServerOptions> _options;
     private readonly SymmetricSecurityKey _signingKey;
@@ -51,7 +62,49 @@ public sealed class TokenService
     public (string Token, DateTimeOffset ExpiresAt) CreateStreamToken(string userId, Role role) =>
         CreateToken(userId, role, TimeSpan.FromMinutes(Auth.AccessTokenMinutes), scope: StreamScope);
 
-    private (string, DateTimeOffset) CreateToken(string userId, Role role, TimeSpan lifetime, string? scope)
+    /// <summary>
+    /// A stream token narrowed to one alert's poster, for the picture on a push notification.
+    ///
+    /// <para><b>Why it may live for hours where every other URL-borne token lives for minutes.</b>
+    /// A browser fetches a notification's image itself, with no <c>Authorization</c> header
+    /// available to it, and it does so whenever the notification is drawn — which may be long after
+    /// the push was composed. A stream token's ten minutes routinely expires first, and the
+    /// notification then shows no picture at all. Lengthening a *general* stream token to cover
+    /// that would hand out hours of access to every media route on the deployment; this hands out
+    /// hours of access to one JPEG.</para>
+    ///
+    /// <para><b>Why a separate claim rather than a third scope.</b> <c>Program.cs</c> tells its two
+    /// bearer schemes apart with <c>hasStreamScope != requireStreamScope</c> — a boolean — so a
+    /// token carrying some other scope value reads as <em>not</em> a stream token, is refused by the
+    /// <c>StreamToken</c> scheme and is <em>accepted by the default one</em>: a picture credential
+    /// would quietly become a full Serval session. Keeping <see cref="StreamScope"/> and adding a
+    /// claim beside it leaves that boolean untouched. The same trap is written up at length on
+    /// <see cref="GoogleHome.CameraStreamTicketService"/>, which answered it by not being a JWT at
+    /// all — a choice unavailable here, since an in-memory ticket dies on restart and a notification
+    /// outlives one.</para>
+    ///
+    /// <para>What is given up is revocation, which a JWT cannot do. The bound on that is the claim:
+    /// the worst a leaked one buys is a single alert's picture until it expires.</para>
+    /// </summary>
+    public (string Token, DateTimeOffset ExpiresAt) CreateAlertImageToken(
+        string userId, string alertId, TimeSpan lifetime) =>
+        CreateToken(userId, Role.Viewer, lifetime, scope: StreamScope, alertId: alertId);
+
+    /// <summary>
+    /// Whether this principal may read <paramref name="alertId"/>'s picture. True for any ordinary
+    /// credential; an alert image token names the one alert it was minted for and opens nothing else.
+    ///
+    /// <para>Every claim rather than the first: a policy listing two schemes authenticates both and
+    /// merges the identities into one principal, so a request carrying a header token <em>and</em> an
+    /// alert token in its query holds the claim either way. "No claim disagrees" is the question,
+    /// not "what does the first one say".</para>
+    /// </summary>
+    public static bool MayViewAlert(ClaimsPrincipal principal, string alertId) =>
+        principal.FindAll(AlertClaimType)
+            .All(c => string.Equals(c.Value, alertId, StringComparison.Ordinal));
+
+    private (string, DateTimeOffset) CreateToken(
+        string userId, Role role, TimeSpan lifetime, string? scope, string? alertId = null)
     {
         DateTimeOffset expires = DateTimeOffset.UtcNow.Add(lifetime);
 
@@ -65,6 +118,11 @@ public sealed class TokenService
         if (scope is not null)
         {
             claims.Add(new Claim(ScopeClaimType, scope));
+        }
+
+        if (alertId is not null)
+        {
+            claims.Add(new Claim(AlertClaimType, alertId));
         }
 
         var token = new JwtSecurityToken(

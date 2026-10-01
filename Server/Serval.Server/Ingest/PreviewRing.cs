@@ -135,8 +135,8 @@ internal static class PreviewRing
             "-hls_segment_type", "fmp4",
             "-hls_time", segmentSeconds.ToString(CultureInfo.InvariantCulture),
 
-            // The exact inverse of the recording output, which sets hls_list_size 0 and omits
-            // delete_segments so that nothing ffmpeg writes is ever lost. Here ffmpeg owning the
+            // The exact inverse of the recording output, which omits delete_segments so that
+            // nothing ffmpeg writes is ever lost. Here ffmpeg owning the
             // pruning is the whole point: it bounds the ring at its source, so there is no janitor
             // to write, nothing to fall behind, and no way for a camera to fill a disk with footage
             // nobody asked to keep.

@@ -256,9 +256,9 @@ public static class HlsPlaylist
     /// presented as a stream that has not finished.
     ///
     /// <para><b>Why ffmpeg's own <c>live.m3u8</c> is not simply served instead.</b> Two reasons,
-    /// both deliberate elsewhere. It is written with <c>hls_list_size 0</c> so that nothing is ever
-    /// deleted from it — the retention worker prunes by age instead — which means it names every
-    /// segment the session ever wrote, and a player handed it would open hours behind. And its
+    /// both deliberate elsewhere. It lists the last
+    /// <see cref="Ingest.RecordArguments.PlaylistWindowSeconds"/> of the session, sized for the
+    /// indexer rather than for a player, which handed it would open that far behind. And its
     /// segment names carry no credential, so on any authenticated route the playlist would load and
     /// every segment would then 401. See <see cref="BuildVod"/>'s note on relative resolution.</para>
     ///
