@@ -36,7 +36,7 @@ dependencies:
 
   # Handing a saved clip to the platform's share sheet, through the same conditional-import seam
   # as the saver: on web it is navigator.share, and a Linux desktop reports that it has no sheet.
-  share_plus: ^13.3.0
+  share_plus: ^13.3.1
   web_socket_channel: ^3.0.3
   flutter_webrtc: ^1.6.2+hotfix.3
 
