@@ -19,8 +19,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.14" />
   </ItemGroup>
 
   <!--
@@ -44,28 +44,29 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="LLamaSharp" Version="0.27.0" />
-    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.27.0"
+    <PackageReference Include="LLamaSharp" Version="0.30.0" />
+    <PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.30.0"
                      Condition="'$(LlamaBackend)' == 'Cpu'" />
-    <PackageReference Include="LLamaSharp.Backend.Vulkan" Version="0.27.0"
+    <PackageReference Include="LLamaSharp.Backend.Vulkan" Version="0.30.0"
                      Condition="'$(LlamaBackend)' == 'Vulkan'" />
   </ItemGroup>
 
   <!--
-    Pure-managed JPEG decode. Two callers: the NPU vision path (RkllmVisionRunner), which must
-    hand the RKNN encoder raw RGB, and the motion gate, which needs downscaled grayscale. No
-    native dependency (unlike OpenCvSharp, which we avoid because it has no linux-arm64 runtime),
-    so it behaves identically on the desktop, the Pi and in the Server's container.
+    JPEG decode. Two callers: the NPU vision path (RkllmVisionRunner), which must hand the RKNN
+    encoder raw RGB, and the motion gate, which needs downscaled grayscale. See JpegDecoder.
 
-    Held on 3.x. The split license grants Serval the Apache-2.0 terms either way — an AGPL project
-    qualifies, and so does a company under 1M USD — but 4.0 added an MSBuild task that fails the
-    compile unless a sixlabors.lic or $(SixLaborsLicenseKey) is present on the machine doing the
-    build. Serval is built from source by whoever clones it, so that key would have to be carried
-    in the repository for a stranger's `docker compose up` to work at all. 4.x is only takeable if
-    Six Labors confirms a community key may be published; short of that, this stays at 3.1.
+    SkiaSharp is Microsoft's (MIT), and its JPEG codec is libjpeg-turbo, which decodes at 1/2, 1/4
+    or 1/8 scale inside the IDCT — the motion gate's downscale costs almost nothing as a result.
+    The NoDependencies native asset bundles libSkiaSharp for linux-x64 and linux-arm64 without the
+    fontconfig dependency, so neither the Server's container nor the Pi needs anything installed.
+    The two packages ship in lockstep and must carry the same version.
+
+    Not ImageSharp: from 3.2 it fails the compile unless a Six Labors license key is present on the
+    machine doing the build, and Serval is built from source by whoever clones it.
   -->
   <ItemGroup>
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageReference Include="SkiaSharp" Version="4.154.0" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.154.0" />
   </ItemGroup>
 
   <!--

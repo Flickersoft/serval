@@ -1,12 +1,10 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace Serval.Ai;
 
 /// <summary>
-/// The decode half of the motion gate: turns a JPEG into the small grayscale buffer
-/// <see cref="MotionScorer"/> compares, and remembers the previous one.
+/// The JPEG front end of the motion gate: turns each snapshot into a luma plane and hands it to a
+/// <see cref="FrameMotionDetector"/>, which downscales, compares and remembers the previous one.
 ///
 /// One instance per camera — it holds that camera's previous frame, so sharing one across cameras
 /// would compare each camera against whichever camera happened to publish last, and report
@@ -16,12 +14,12 @@ namespace Serval.Ai;
 /// </summary>
 public sealed class JpegMotionDetector
 {
-    private readonly MotionOptions _options;
-    private byte[]? _previous;
+    private readonly FrameMotionDetector _frames;
+    private byte[] _luma = [];
 
     public JpegMotionDetector(MotionOptions options)
     {
-        _options = options;
+        _frames = new FrameMotionDetector(options);
     }
 
     /// <summary>
@@ -33,46 +31,31 @@ public sealed class JpegMotionDetector
     /// </summary>
     public MotionResult Accept(ReadOnlySpan<byte> jpeg)
     {
-        byte[] current = ToGrayscale(jpeg);
+        // Decoded only as large as the compare grid needs: the box average that follows throws
+        // the rest of the resolution away, and the codec can skip computing it in the first place.
+        using SKBitmap image = JpegDecoder.Decode(jpeg, _frames.GridWidth, _frames.GridHeight);
 
-        if (_previous is null)
+        int width = image.Width;
+        int height = image.Height;
+        if (_luma.Length != width * height)
         {
-            _previous = current;
-            return MotionResult.None;
+            _luma = new byte[width * height];
         }
 
-        MotionResult result = MotionScorer.Compare(_previous, current, _options);
-
-        // Replace unconditionally, including when the comparison was rejected as a lighting flip.
-        // Keeping the pre-flip frame as the reference would make every subsequent frame look
-        // wildly different and jam the gate shut for as long as the new lighting lasted.
-        _previous = current;
-        return result;
+        ToLuma(image.GetPixelSpan(), _luma);
+        return _frames.Accept(_luma, width, height).Result;
     }
 
-    private byte[] ToGrayscale(ReadOnlySpan<byte> jpeg)
+    /// <summary>
+    /// Full-range BT.601 luma, the Y a JPEG stores. Recomputed from RGBA because Skia only decodes
+    /// to gray from a gray source; motion is a brightness question, so the colour is discarded here
+    /// rather than carried through the downscale.
+    /// </summary>
+    private static void ToLuma(ReadOnlySpan<byte> rgba, Span<byte> luma)
     {
-        // Decode straight to 8-bit luma: motion is a brightness-change question, and carrying
-        // three channels through the resize would triple the work for no extra signal.
-        using Image<L8> image = Image.Load<L8>(jpeg);
-
-        image.Mutate(x => x.Resize(new ResizeOptions
+        for (int i = 0, p = 0; i < luma.Length; i++, p += 4)
         {
-            Size = new Size(_options.CompareWidth, _options.CompareHeight),
-
-            // Stretch rather than preserve aspect: both frames get the same treatment, so the
-            // distortion cancels out in the comparison, and padding would add constant borders
-            // that dilute the changed-pixel fraction.
-            Mode = ResizeMode.Stretch,
-
-            // Box sampling averages the pixels it discards instead of point-sampling them, which
-            // is what makes the downscale suppress sensor noise rather than alias it into
-            // false motion.
-            Sampler = KnownResamplers.Box,
-        }));
-
-        var pixels = new byte[image.Width * image.Height];
-        image.CopyPixelDataTo(pixels);
-        return pixels;
+            luma[i] = (byte)(((77 * rgba[p]) + (150 * rgba[p + 1]) + (29 * rgba[p + 2]) + 128) >> 8);
+        }
     }
 }

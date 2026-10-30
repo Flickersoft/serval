@@ -22,8 +22,8 @@ public readonly record struct MotionResult(bool Moved, double ChangedFraction, b
 /// behind it runs seconds at a time.
 ///
 /// Works on already-downscaled grayscale buffers and does no decoding, which keeps it
-/// dependency-free and testable without an image library. See <c>JpegMotionDetector</c> in
-/// Serval.Ai for the decode-and-downscale half.
+/// dependency-free and testable without an image library. See <see cref="FrameMotionDetector"/>
+/// for the downscale, and <c>JpegMotionDetector</c> in Serval.Ai for the decode in front of it.
 ///
 /// Plain frame differencing rather than background subtraction, deliberately: a background model
 /// needs to learn, drifts when the camera is bumped, and has to be told what "background" means

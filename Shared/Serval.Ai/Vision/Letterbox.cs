@@ -1,6 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace Serval.Ai;
 
@@ -14,14 +12,20 @@ namespace Serval.Ai;
 /// back a few percent off in a direction that depends on the source aspect ratio, with nothing
 /// failing.
 ///
-/// The padding is computed here rather than delegated to <see cref="ResizeMode.Pad"/> for the same
+/// The padding is computed here rather than delegated to a fit-and-centre helper for the same
 /// reason: an odd difference between source and target splits unevenly, and inferring which side
 /// got the extra pixel makes <see cref="ToSource"/> wrong by one and impossible to notice.
 /// </summary>
 public sealed class Letterboxed : IDisposable
 {
+    /// <summary>
+    /// Trilinear: bilinear within the nearest two mip levels. Plain bilinear point-samples a 4x
+    /// downscale and aliases fine detail into the model's input; the mip chain averages it first.
+    /// </summary>
+    private static readonly SKSamplingOptions Downscale = new(SKFilterMode.Linear, SKMipmapMode.Linear);
+
     private Letterboxed(
-        Image<Rgb24> image,
+        SKBitmap image,
         float scale,
         int padX,
         int padY,
@@ -36,8 +40,8 @@ public sealed class Letterboxed : IDisposable
         SourceHeight = sourceHeight;
     }
 
-    /// <summary>The padded result, at the model's input size.</summary>
-    public Image<Rgb24> Canvas { get; }
+    /// <summary>The padded result, at the model's input size, as opaque RGBA.</summary>
+    public SKBitmap Canvas { get; }
 
     /// <summary>Source pixels per model pixel. Never above 1 when the source is larger than the
     /// target, which is the usual case.</summary>
@@ -58,9 +62,9 @@ public sealed class Letterboxed : IDisposable
     /// </summary>
     /// <param name="pad">Fill for the padded strips. Mid-gray by convention: it is the least
     /// suggestive thing to show a model, where black reads as shadow and white as blown sky.</param>
-    public static Letterboxed Fit(ReadOnlySpan<byte> jpeg, int width, int height, Color pad)
+    public static Letterboxed Fit(ReadOnlySpan<byte> jpeg, int width, int height, SKColor pad)
     {
-        using Image<Rgb24> source = Image.Load<Rgb24>(jpeg);
+        using SKBitmap source = JpegDecoder.Decode(jpeg);
 
         float scale = Math.Min((float)width / source.Width, (float)height / source.Height);
         int scaledWidth = Math.Max(1, (int)MathF.Round(source.Width * scale));
@@ -68,16 +72,22 @@ public sealed class Letterboxed : IDisposable
         int padX = (width - scaledWidth) / 2;
         int padY = (height - scaledHeight) / 2;
 
-        using Image<Rgb24> scaled = source.Clone(x => x.Resize(scaledWidth, scaledHeight));
+        var canvas = new SKBitmap(
+            new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
 
-        var canvas = new Image<Rgb24>(width, height, pad);
-        canvas.Mutate(x => x.DrawImage(scaled, new Point(padX, padY), 1f));
+        using (var drawing = new SKCanvas(canvas))
+        using (SKImage image = SKImage.FromBitmap(source))
+        {
+            drawing.Clear(pad);
+            drawing.DrawImage(
+                image, SKRect.Create(padX, padY, scaledWidth, scaledHeight), Downscale);
+        }
 
         return new Letterboxed(canvas, scale, padX, padY, source.Width, source.Height);
     }
 
     /// <summary>Fits to a square.</summary>
-    public static Letterboxed Fit(ReadOnlySpan<byte> jpeg, int size, Color pad) =>
+    public static Letterboxed Fit(ReadOnlySpan<byte> jpeg, int size, SKColor pad) =>
         Fit(jpeg, size, size, pad);
 
     /// <summary>
@@ -104,21 +114,15 @@ public sealed class Letterboxed : IDisposable
     /// </summary>
     public byte[] ToNhwcBytes()
     {
+        ReadOnlySpan<byte> rgba = Canvas.GetPixelSpan();
         var buffer = new byte[Canvas.Width * Canvas.Height * 3];
-        int i = 0;
 
-        Canvas.ProcessPixelRows(accessor =>
+        for (int i = 0, p = 0; i < buffer.Length; i += 3, p += 4)
         {
-            for (int y = 0; y < accessor.Height; y++)
-            {
-                foreach (Rgb24 px in accessor.GetRowSpan(y))
-                {
-                    buffer[i++] = px.R;
-                    buffer[i++] = px.G;
-                    buffer[i++] = px.B;
-                }
-            }
-        });
+            buffer[i] = rgba[p];
+            buffer[i + 1] = rgba[p + 1];
+            buffer[i + 2] = rgba[p + 2];
+        }
 
         return buffer;
     }
@@ -129,27 +133,16 @@ public sealed class Letterboxed : IDisposable
     /// </summary>
     public float[] ToNchwFloats(float scale = 1f / 255f)
     {
-        int width = Canvas.Width;
-        int height = Canvas.Height;
-        int plane = width * height;
+        ReadOnlySpan<byte> rgba = Canvas.GetPixelSpan();
+        int plane = Canvas.Width * Canvas.Height;
         var buffer = new float[plane * 3];
 
-        Canvas.ProcessPixelRows(accessor =>
+        for (int i = 0, p = 0; i < plane; i++, p += 4)
         {
-            for (int y = 0; y < height; y++)
-            {
-                Span<Rgb24> row = accessor.GetRowSpan(y);
-                int offset = y * width;
-
-                for (int x = 0; x < width; x++)
-                {
-                    Rgb24 px = row[x];
-                    buffer[offset + x] = px.R * scale;
-                    buffer[plane + offset + x] = px.G * scale;
-                    buffer[(2 * plane) + offset + x] = px.B * scale;
-                }
-            }
-        });
+            buffer[i] = rgba[p] * scale;
+            buffer[plane + i] = rgba[p + 1] * scale;
+            buffer[(2 * plane) + i] = rgba[p + 2] * scale;
+        }
 
         return buffer;
     }

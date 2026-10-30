@@ -667,8 +667,8 @@ class LiveServalRepository implements ServalRepository {
     final wasBlank = _frames[frame.cameraId]?.value == null;
     _notifierFor(frame.cameraId).value = frame.jpeg;
 
-    // The first frame flips the camera from connecting to online, which is a structural change
-    // the wall's chrome reads. Subsequent frames are the tile's business alone.
+    // The first frame flips the camera to online, which is a structural change the wall's chrome
+    // reads. Subsequent frames are the tile's business alone.
     if (wasBlank) _registryChanges.changed();
   }
 
@@ -915,15 +915,15 @@ class LiveServalRepository implements ServalRepository {
   /// from the background has stale frames for every camera at once, and "we have not heard from any
   /// of them since we started listening again" is not the same claim as "each of them has stopped".
   ///
+  /// A camera that has never sent a frame is the same silence as one whose frames have gone stale,
+  /// and gets the same window: it is given [_listeningWindow] to be heard from and is offline after
+  /// that. A page opened while a camera is down says so within fifteen seconds, where an unbounded
+  /// wait would leave that tile reading as about to arrive for as long as the page stayed open.
+  ///
   /// Keyed by id rather than taking a [CameraRecord], because [clockDigest] walks [_order] and the
   /// test seam never fills [_records].
   CameraConnection _frameStateOf(String cameraId) {
     if (_hasFreshFrame(cameraId)) return CameraConnection.online;
-
-    // Never a frame at all — the cold-start posture, and deliberately not bounded by the window.
-    // This says we have never successfully heard from this camera, which no amount of elapsed
-    // listening changes into a measurement.
-    if (!_lastFrameAt.containsKey(cameraId)) return CameraConnection.connecting;
 
     return _withinListeningWindow
         ? CameraConnection.connecting

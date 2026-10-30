@@ -1,9 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace Serval.Ai;
 
@@ -292,8 +290,8 @@ public sealed class RkllmVisionRunner : IVisionInferenceRunner
 
     /// <summary>
     /// Decodes the JPEG and letterboxes it to the encoder's input (gray padding), the same
-    /// preprocessing the reference does with OpenCV — but pure-managed, so no image-library native
-    /// dependency. Returns tightly-packed uint8 RGB in NHWC order.
+    /// preprocessing the reference does with OpenCV — but through SkiaSharp, which unlike OpenCvSharp
+    /// ships a linux-arm64 runtime. Returns tightly-packed uint8 RGB in NHWC order.
     ///
     /// The letterboxing is <see cref="Letterboxed"/>, shared with the object detector, which needs
     /// the identical transform. Nothing here maps coordinates back: this path hands the encoder a
@@ -302,7 +300,7 @@ public sealed class RkllmVisionRunner : IVisionInferenceRunner
     private byte[] Preprocess(byte[] imageJpeg)
     {
         using Letterboxed frame = Letterboxed.Fit(
-            imageJpeg, _modelWidth, _modelHeight, Color.FromRgb(127, 127, 127));
+            imageJpeg, _modelWidth, _modelHeight, new SKColor(127, 127, 127));
 
         return frame.ToNhwcBytes();
     }

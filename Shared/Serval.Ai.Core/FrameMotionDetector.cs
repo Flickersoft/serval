@@ -17,8 +17,8 @@ public readonly ref struct FrameMotion(MotionResult result, ReadOnlySpan<byte> c
 ///
 /// <para>Free of any image library, and that is not incidental. A <c>yuv420p</c> frame's luma plane
 /// is already exactly what this wants — one 8-bit sample per pixel, full resolution — so there is
-/// nothing to decode and nothing to convert. The JPEG equivalent had to decode an encoded picture and
-/// resize it through ImageSharp for every frame of every camera; this is a box average over a span.
+/// nothing to decode and nothing to convert. The JPEG equivalent, <c>JpegMotionDetector</c>, has to
+/// decode an encoded picture for every frame of every camera first; this is a box average over a span.
 /// It is the reason frames are carried as planar YUV rather than RGB.</para>
 ///
 /// <para>One instance per camera: it holds that camera's previous grid, so sharing one would compare
