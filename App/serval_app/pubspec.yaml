@@ -28,7 +28,7 @@ dependencies:
 
   # SHA-256, for naming this browser's push subscription: a subscription's id is the hash of its
   # endpoint, so nothing has to be stored to survive cleared storage.
-  crypto: ^3.0.7
+  crypto: ^3.0.8
 
   # Where a saved snapshot or clip lands on desktop. No web implementation, so it is reached
   # through a conditional import exactly as lib/playback/ does for the two players.
@@ -38,7 +38,7 @@ dependencies:
   # as the saver: on web it is navigator.share, and a Linux desktop reports that it has no sheet.
   share_plus: ^13.3.1
   web_socket_channel: ^3.0.3
-  flutter_webrtc: ^1.6.2+hotfix.3
+  flutter_webrtc: ^1.6.3
 
   # Replay. The live view is WebRTC, but a recording is an HLS VOD playlist, which
   # `flutter_webrtc` cannot play — so the scrubber needs a second player.
