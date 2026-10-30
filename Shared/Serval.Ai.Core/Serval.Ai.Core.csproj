@@ -12,7 +12,7 @@
     detection gates in it (MotionScorer, AudioLevelGate) are the code that runs on every frame and
     every audio window — so they must be unit-testable on a fresh clone with no models fetched, no
     native runtime present, and no device attached. Anything needing sherpa-onnx, LLamaSharp or
-    ImageSharp belongs in Serval.Ai instead.
+    SkiaSharp belongs in Serval.Ai instead.
   -->
 
 </Project>

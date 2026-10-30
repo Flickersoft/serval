@@ -1,7 +1,5 @@
 using Serval.Ai;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 
 namespace Serval.Ai.Tests;
 
@@ -16,20 +14,15 @@ namespace Serval.Ai.Tests;
 /// </summary>
 public class DetectionPostprocessTests
 {
-    private static byte[] Jpeg(int width, int height)
-    {
-        using var image = new Image<Rgb24>(width, height, Color.FromRgb(10, 120, 200));
-        using var buffer = new MemoryStream();
-        image.SaveAsJpeg(buffer);
-        return buffer.ToArray();
-    }
+    private static byte[] Jpeg(int width, int height) =>
+        TestJpeg.Solid(width, height, new SKColor(10, 120, 200));
 
     [Fact]
     public void A_landscape_frame_is_padded_top_and_bottom_only()
     {
         // 640x360 into a 640 square: no horizontal scaling at all, 140 rows of padding split
         // evenly. Scale 1.0 is the case the snapshot pipeline actually produces.
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 360), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 360), 640, new SKColor(127, 127, 127));
 
         Assert.Equal(1.0f, frame.Scale, 3);
         Assert.Equal(0, frame.PadX);
@@ -43,7 +36,7 @@ public class DetectionPostprocessTests
     {
         // The load-bearing assertion. A person at (100,50) 80x200 in the source must come back as
         // exactly that after being letterboxed and un-letterboxed.
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 360), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 360), 640, new SKColor(127, 127, 127));
 
         // Same rectangle expressed in model-input pixels: x unchanged (scale 1, no pad), y shifted
         // down by the top padding.
@@ -60,7 +53,7 @@ public class DetectionPostprocessTests
     {
         // 2560x1440 is a real camera resolution and scales to 0.25. Getting the divide and the pad
         // in the wrong order is invisible at scale 1.0 and obvious here.
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(2560, 1440), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(2560, 1440), 640, new SKColor(127, 127, 127));
 
         Assert.Equal(0.25f, frame.Scale, 3);
         Assert.Equal(140, frame.PadY);
@@ -76,7 +69,7 @@ public class DetectionPostprocessTests
     [Fact]
     public void A_portrait_frame_pads_left_and_right()
     {
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(360, 640), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(360, 640), 640, new SKColor(127, 127, 127));
 
         Assert.Equal(140, frame.PadX);
         Assert.Equal(0, frame.PadY);
@@ -92,7 +85,7 @@ public class DetectionPostprocessTests
     {
         // Objects at the edge routinely predict past it, and a consumer drawing that literally
         // would draw outside the picture.
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 360), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 360), 640, new SKColor(127, 127, 127));
 
         BoundingBox box = frame.ToSource(-50, frame.PadY - 30, 200, 100);
 
@@ -154,7 +147,7 @@ public class DetectionPostprocessTests
         // quadruple by inspection. Reading them as a centre and a size produces boxes plausible
         // enough to ship — roughly the right place, badly the wrong size — so only pinned
         // coordinates catch it.
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, new SKColor(127, 127, 127));
         float[] output = Tensor(8, (X1: 270, Y1: 220, X2: 370, Y2: 420, Score: 0.9f, Class: 0));
 
         DetectedObject person = Assert.Single(Decode(
@@ -174,7 +167,7 @@ public class DetectionPostprocessTests
         // The head always returns its full row count, so the zeroed tail is the normal case rather
         // than a malformed one. Decoding it literally would report a pile of zero-size "person"
         // boxes in the top-left corner of every single frame.
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, new SKColor(127, 127, 127));
         float[] output = Tensor(300, (100, 100, 200, 300, 0.8f, 0));
 
         Assert.Single(Decode(output, detections: 300, frame.Geometry, 0.25f, out _));
@@ -183,7 +176,7 @@ public class DetectionPostprocessTests
     [Fact]
     public void Anything_under_the_threshold_is_dropped()
     {
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, new SKColor(127, 127, 127));
         float[] output = Tensor(8, (270, 220, 370, 420, 0.2f, 0));
 
         Assert.Empty(Decode(output, detections: 8, frame.Geometry, 0.25f, out _));
@@ -192,7 +185,7 @@ public class DetectionPostprocessTests
     [Fact]
     public void A_box_with_no_area_or_crossed_corners_is_dropped()
     {
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, new SKColor(127, 127, 127));
         float[] output = Tensor(
             8,
             (300, 300, 300, 400, 0.9f, 0),   // zero width
@@ -208,7 +201,7 @@ public class DetectionPostprocessTests
         // This count is the only signal that a labels file disagrees with the weights, since the
         // head declares no class count to check the file's length against. One bad row must not
         // cost the good ones in the same frame.
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, new SKColor(127, 127, 127));
         float[] output = Tensor(
             8,
             (100, 100, 200, 300, 0.9f, 7),
@@ -225,7 +218,7 @@ public class DetectionPostprocessTests
     public void A_class_index_arrives_as_a_float_and_is_rounded_not_truncated()
     {
         // Class 1 in a float tensor can come back as 0.9999999. Truncating that reports "person".
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, new SKColor(127, 127, 127));
         float[] output = Tensor(8, (100, 100, 200, 300, 0.9f, 0));
         output[5] = 0.9999999f;
 
@@ -238,7 +231,7 @@ public class DetectionPostprocessTests
     {
         // The head makes no promise about ordering, so the sort is what makes the result a function
         // of the tensor rather than of the graph's internals.
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, new SKColor(127, 127, 127));
         float[] output = Tensor(
             8,
             (10, 10, 60, 110, 0.4f, 0),
@@ -258,7 +251,7 @@ public class DetectionPostprocessTests
         // considered answer rather than the redundant firing a suppression pass exists to collapse.
         // Adding an overlap filter here would silently delete one of a genuine pair — the second of
         // two people standing together is exactly this shape.
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, new SKColor(127, 127, 127));
         float[] output = Tensor(
             8,
             (270, 220, 370, 420, 0.9f, 0),
@@ -271,7 +264,7 @@ public class DetectionPostprocessTests
     public void Decoded_boxes_come_back_in_the_source_frames_coordinates_not_the_models()
     {
         // The join between the two halves, and the one a unit test of either alone would miss.
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(1280, 720), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(1280, 720), 640, new SKColor(127, 127, 127));
         float[] output = Tensor(8, (288, 275, 352, 365, 0.9f, 0));
 
         DetectedObject person = Assert.Single(Decode(
@@ -287,7 +280,7 @@ public class DetectionPostprocessTests
     {
         // A buffer can be longer than the rows the model claims. Reading the buffer instead of the
         // shape would decode trailing slack as detections whenever a backend over-allocates.
-        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, Color.FromRgb(127, 127, 127));
+        using Letterboxed frame = Letterboxed.Fit(Jpeg(640, 640), 640, new SKColor(127, 127, 127));
 
         // Two real rows, then slack that would clear the threshold if it were read.
         float[] output = Tensor(8, (270, 220, 370, 420, 0.9f, 0), (10, 10, 60, 60, 0.8f, 1));

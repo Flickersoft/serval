@@ -85,23 +85,23 @@ void main() {
     });
 
     test(
-      'a camera that has never sent a frame is not the same as one that has stopped',
+      'the listening window closing over a camera that has never sent a frame',
       () {
-        // These two read differently on the wall — `connecting` versus `offline` — because a
-        // camera nobody has ever heard from has not been measured, and one that stopped has. A
-        // digest that only carried freshness would collapse them.
-        final never = repository()..seedForTest(order: ['front-door']);
-        final stopped = repository()
+        // A page opened while a camera is down: `connecting` for the fifteen seconds it is given
+        // to be heard from, `offline` after. There is no frame clock for this camera at all, so a
+        // digest built from freshness would read the same on both sides of that moment and the
+        // tile would never be told it had crossed.
+        final now = DateTime.now();
+
+        final listening = repository()
+          ..seedForTest(order: ['front-door'], listeningSince: now);
+        final givenUp = repository()
           ..seedForTest(
             order: ['front-door'],
-            lastFrameAt: {
-              'front-door': DateTime.now().subtract(
-                const Duration(seconds: 20),
-              ),
-            },
+            listeningSince: now.subtract(const Duration(seconds: 30)),
           );
 
-        expect(never.clockDigest(), isNot(stopped.clockDigest()));
+        expect(listening.clockDigest(), isNot(givenUp.clockDigest()));
       },
     );
 
@@ -318,11 +318,11 @@ void main() {
       // is '-' here because nothing has seeded a sample.
       //
       // Four characters per camera, and the first is a `CameraConnection` index rather than a bit:
-      // this camera has never sent a frame and nothing is listening, which is `connecting` (1).
+      // this camera has never sent a frame and nothing is listening, which is `offline` (2).
       final segments = wall.clockDigest().split('|');
       expect(segments, hasLength(4));
       expect(segments[1], isNot(segments[2]));
-      expect(segments[2], '1000');
+      expect(segments[2], '2000');
       expect(segments.last, '-');
     });
   });

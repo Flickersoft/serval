@@ -5,6 +5,7 @@ import 'package:phosphor_icons/phosphor_icons.dart';
 import '../models/camera.dart';
 import '../theme/nocturne.dart';
 import '../theme/serval_tokens.dart';
+import 'dashed_border.dart';
 import 'pill.dart';
 import 'tile_placeholder.dart';
 
@@ -439,22 +440,15 @@ class _DashedBorderPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final path = Path()
-      ..addRRect(
-        RRect.fromRectAndRadius(Offset.zero & size, Radius.circular(radius)),
-      );
     final paint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
 
-    for (final metric in path.computeMetrics()) {
-      var distance = 0.0;
-      while (distance < metric.length) {
-        canvas.drawPath(metric.extractPath(distance, distance + 5), paint);
-        distance += 9;
-      }
-    }
+    canvas.drawPath(
+      dashedRRectPath(Offset.zero & size, radius, dash: 5, gap: 4),
+      paint,
+    );
   }
 
   @override

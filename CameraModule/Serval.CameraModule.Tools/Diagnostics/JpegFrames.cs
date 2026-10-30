@@ -1,6 +1,5 @@
 using Serval.Ai;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 
 namespace Serval.CameraModule;
 
@@ -14,7 +13,7 @@ internal static class JpegFrames
     public static async Task<IReadOnlyList<DetectedObject>> DetectAsync(
         IObjectDetector detector, byte[] jpeg, CancellationToken cancellationToken)
     {
-        using Image<Rgb24> image = Image.Load<Rgb24>(jpeg);
+        using SKBitmap image = JpegDecoder.Decode(jpeg);
 
         // yuv420p has half-resolution chroma, so dimensions must be even; drop a stray edge
         // row/column rather than refuse the file.
@@ -36,41 +35,38 @@ internal static class JpegFrames
     /// BT.601 limited range — the inverse of <see cref="FramePreparer"/>'s read side, so the round
     /// trip through this file matches what a camera's decoded stream produces.
     /// </summary>
-    private static byte[] ToYuv420p(Image<Rgb24> image, int width, int height)
+    private static byte[] ToYuv420p(SKBitmap image, int width, int height)
     {
         byte[] frame = new byte[width * height * 3 / 2];
         int lumaSize = width * height;
         int chromaOffsetV = lumaSize + (lumaSize / 4);
+        ReadOnlySpan<byte> rgba = image.GetPixelSpan();
+        int stride = image.RowBytes;
 
-        image.ProcessPixelRows(access =>
+        for (int y = 0; y < height; y++)
         {
-            for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
             {
-                Span<Rgb24> row = access.GetRowSpan(y);
-                for (int x = 0; x < width; x++)
-                {
-                    Rgb24 pixel = row[x];
-                    frame[(y * width) + x] = (byte)Math.Clamp(
-                        (((66 * pixel.R) + (129 * pixel.G) + (25 * pixel.B) + 128) >> 8) + 16, 0, 255);
-                }
+                int p = (y * stride) + (x * 4);
+                frame[(y * width) + x] = (byte)Math.Clamp(
+                    (((66 * rgba[p]) + (129 * rgba[p + 1]) + (25 * rgba[p + 2]) + 128) >> 8) + 16, 0, 255);
             }
+        }
 
-            // Chroma from the top-left pixel of each 2x2 block; averaging buys nothing a detector
-            // can measure, and this keeps the conversion exact to invert.
-            for (int y = 0; y < height; y += 2)
+        // Chroma from the top-left pixel of each 2x2 block; averaging buys nothing a detector
+        // can measure, and this keeps the conversion exact to invert.
+        for (int y = 0; y < height; y += 2)
+        {
+            for (int x = 0; x < width; x += 2)
             {
-                Span<Rgb24> row = access.GetRowSpan(y);
-                for (int x = 0; x < width; x += 2)
-                {
-                    Rgb24 pixel = row[x];
-                    int index = ((y / 2) * (width / 2)) + (x / 2);
-                    frame[lumaSize + index] = (byte)Math.Clamp(
-                        (((-38 * pixel.R) - (74 * pixel.G) + (112 * pixel.B) + 128) >> 8) + 128, 0, 255);
-                    frame[chromaOffsetV + index] = (byte)Math.Clamp(
-                        (((112 * pixel.R) - (94 * pixel.G) - (18 * pixel.B) + 128) >> 8) + 128, 0, 255);
-                }
+                int p = (y * stride) + (x * 4);
+                int index = ((y / 2) * (width / 2)) + (x / 2);
+                frame[lumaSize + index] = (byte)Math.Clamp(
+                    (((-38 * rgba[p]) - (74 * rgba[p + 1]) + (112 * rgba[p + 2]) + 128) >> 8) + 128, 0, 255);
+                frame[chromaOffsetV + index] = (byte)Math.Clamp(
+                    (((112 * rgba[p]) - (94 * rgba[p + 1]) - (18 * rgba[p + 2]) + 128) >> 8) + 128, 0, 255);
             }
-        });
+        }
 
         return frame;
     }

@@ -1,6 +1,4 @@
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 
 namespace Serval.Ai.Tests;
 
@@ -302,7 +300,7 @@ public class FramePreparerTests
         int sourceWidth, int sourceHeight)
     {
         // The two paths reach a detector by completely different routes — one decodes and resizes
-        // through ImageSharp, the other scales in ffmpeg and crops here — and they must still put a
+        // through SkiaSharp, the other scales in ffmpeg and crops here — and they must still put a
         // box in the same place. A disagreement would show as detections drifting the day a camera
         // moved onto the raw path, in a direction that depends on its aspect ratio, with nothing
         // failing.
@@ -318,7 +316,7 @@ public class FramePreparerTests
             destination);
 
         using Letterboxed jpeg = Letterboxed.Fit(
-            JpegOf(sourceWidth, sourceHeight), 640, Color.FromRgb(127, 127, 127));
+            JpegOf(sourceWidth, sourceHeight), 640, new SKColor(127, 127, 127));
 
         Assert.Equal(jpeg.Geometry.Scale, raw.Scale, 4);
         Assert.Equal(jpeg.Geometry.PadX, raw.PadX);
@@ -334,11 +332,6 @@ public class FramePreparerTests
         Assert.Equal(fromJpeg.Height, fromRaw.Height, 4);
     }
 
-    private static byte[] JpegOf(int width, int height)
-    {
-        using var image = new Image<Rgb24>(width, height);
-        using var stream = new MemoryStream();
-        image.Save(stream, new JpegEncoder());
-        return stream.ToArray();
-    }
+    private static byte[] JpegOf(int width, int height) =>
+        TestJpeg.Solid(width, height, SKColors.Black);
 }

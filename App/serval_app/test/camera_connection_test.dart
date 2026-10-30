@@ -109,29 +109,43 @@ void main() {
     expect(connectionOf(repository, 'driveway'), CameraConnection.offline);
   });
 
-  test('a camera that has never sent a frame reads connecting', () async {
-    // Deliberately not bounded by the window. This says we have never successfully heard from this
-    // camera — which is not a measurement of it, and no amount of elapsed listening turns it into
-    // one. It is also what stops a cold start painting the whole wall as broken.
-    final repository = await started([camera('driveway')]);
-    repository.seedForTest(
-      order: ['driveway'],
-      listeningSince: DateTime.now().subtract(const Duration(minutes: 5)),
-    );
+  test(
+    'a camera that has never sent a frame reads connecting while the window is open',
+    () async {
+      // What stops a cold start painting the whole wall as broken: for the first fifteen seconds
+      // nothing has been heard from any camera, and none of them is accused of anything.
+      final repository = await started([camera('driveway')]);
+      repository.seedForTest(
+        order: ['driveway'],
+        listeningSince: DateTime.now(),
+      );
 
-    expect(connectionOf(repository, 'driveway'), CameraConnection.connecting);
-  });
+      expect(connectionOf(repository, 'driveway'), CameraConnection.connecting);
+    },
+  );
+
+  test(
+    'a camera that has never sent a frame is offline once the window closes',
+    () async {
+      // Bounded by the same window a stale camera gets. A page opened while a camera is unplugged
+      // has never had a frame from it and never will, and a tile left reading as about to arrive
+      // for as long as the page stays open is the wall withholding the one thing it knows.
+      final repository = await started([camera('driveway')]);
+      repository.seedForTest(
+        order: ['driveway'],
+        listeningSince: DateTime.now().subtract(const Duration(seconds: 30)),
+      );
+
+      expect(connectionOf(repository, 'driveway'), CameraConnection.offline);
+    },
+  );
 
   test(
     'a camera that stayed dead across a resume goes offline while its neighbours come back',
     () async {
-      // This is the test that earns the window over the obvious alternative, which was to clear
-      // the frame clock on resume and let the cold-start branch cover it. Clearing forgets *which*
-      // cameras were dead — so a camera unreachable for a week would read "connecting" forever,
-      // alongside its working neighbours, every time the phone came out of a pocket.
-      //
-      // Keeping the clock and dating our own listening instead gives every camera the same fifteen
-      // seconds, then lets them part company on the evidence.
+      // The window is dated from our own listening rather than from the frames, so a resume gives
+      // every camera the same fifteen seconds and then lets them part company on the evidence: the
+      // one that was dead before the phone went into a pocket is dead after it comes out.
       final now = DateTime.now();
       final repository = await started([
         camera('driveway'),

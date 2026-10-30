@@ -45,8 +45,9 @@ not the license of the NuGet package alone:
   [`.github/dependabot.yml`](.github/dependabot.yml).
 - **ONNX Runtime** (`Microsoft.ML.OnnxRuntime.Managed`, MIT).
 - **LLamaSharp** and its CPU/Vulkan backends (MIT) — which bundle **llama.cpp** (MIT).
-- **MongoDB.Driver** (Apache-2.0), **SixLabors.ImageSharp** (Apache-2.0 under the Six Labors Split
-  License), **SQLitePCLRaw** (Apache-2.0) with **SQLite** (public domain), **PortAudioSharp** with
+- **SkiaSharp** (MIT) — which bundles **Skia** (BSD-3-Clause) and its **libjpeg-turbo** (IJG,
+  BSD-3-Clause, zlib).
+- **MongoDB.Driver** (Apache-2.0), **SQLitePCLRaw** (Apache-2.0) with **SQLite** (public domain), **PortAudioSharp** with
   **PortAudio** (MIT), **Scalar.AspNetCore** (MIT).
 
 The Flutter client's packages — Riverpod, go_router, fl_chart, flutter_webrtc, media_kit,

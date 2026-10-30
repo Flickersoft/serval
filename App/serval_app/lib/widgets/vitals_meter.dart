@@ -6,6 +6,7 @@ import '../data/byte_labels.dart';
 import '../models/vitals_history.dart';
 import '../theme/app_theme.dart';
 import '../theme/nocturne.dart';
+import 'dashed_border.dart';
 import 'vitals_sparkline.dart';
 
 /// One ratio against a limit — processor, memory, GPU — with its recent history under it.
@@ -303,25 +304,19 @@ class _DashedCard extends CustomPainter {
   final Color color;
 
   /// The solid card's radius, so the two are interchangeable without moving anything.
-  static const _radius = Radius.circular(8);
+  static const _radius = 8.0;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final path = Path()
-      ..addRRect(RRect.fromRectAndRadius(Offset.zero & size, _radius));
     final paint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
 
-    for (final metric in path.computeMetrics()) {
-      var start = 0.0;
-      while (start < metric.length) {
-        final end = (start + 4).clamp(0.0, metric.length);
-        canvas.drawPath(metric.extractPath(start, end), paint);
-        start += 7;
-      }
-    }
+    canvas.drawPath(
+      dashedRRectPath(Offset.zero & size, _radius, dash: 4, gap: 3),
+      paint,
+    );
   }
 
   @override

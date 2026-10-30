@@ -84,9 +84,12 @@ we listened, and heard nothing. `LiveServalRepository._frameStateOf` decides:
 | | |
 |---|---|
 | a frame inside `_staleAfter` (15s) | `online` |
-| no frame ever | `connecting` — never measured, and unbounded |
-| stale, inside `_listeningWindow` | `connecting` |
-| stale, window closed | `offline` |
+| no fresh frame, inside `_listeningWindow` | `connecting` |
+| no fresh frame, window closed | `offline` |
+
+"No fresh frame" covers a camera whose frames have gone stale and one that has never sent any.
+They are the same silence and get the same fifteen seconds, so a page opened while a camera is
+unplugged shows it offline rather than leaving the tile reading as about to arrive.
 
 `_listeningSince` is stamped by `start()`, by the dashboard socket's connect edge, and by
 `resumeLive()`. `_listeningWindow` is defined *as* `_staleAfter` rather than as its own figure:
@@ -94,11 +97,9 @@ both answer how long silence is allowed before it counts as absence, from two di
 points, and two constants that happened to agree would be one edit away from a wall that calls a
 camera dead sooner after a reconnect than it does while running.
 
-The obvious alternative was to **clear `_lastFrameAt` on resume** and let the cold-start branch
-cover it. That is worse, and the reason is worth keeping: clearing forgets *which* cameras were
-dead, so a camera unreachable for a week would read "connecting" alongside its working neighbours
-after every resume. Keeping the clock and dating our own listening instead gives every camera the
-same fifteen seconds and then lets them part company on the evidence.
+What is *not* done is to **clear `_lastFrameAt` on resume**. The window is dated from our own
+listening rather than from the frames, so the frame clock can be kept across a resume and every
+camera gets the same fifteen seconds before they part company on the evidence.
 
 Two backstops, because the lifecycle event is the one thing here that depends on the platform
 behaving:

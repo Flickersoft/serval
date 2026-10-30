@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart' show Tooltip;
 import 'package:flutter/widgets.dart';
@@ -9,6 +8,7 @@ import '../models/ptz.dart';
 import '../theme/app_theme.dart';
 import '../theme/nocturne.dart';
 import '../theme/serval_tokens.dart';
+import 'dashed_border.dart';
 
 /// A pan/tilt direction, as the velocities the Server's ONVIF endpoint takes.
 enum PtzDirection {
@@ -429,10 +429,10 @@ class DetectionOverlay extends StatelessWidget {
 
 /// The dotted outline of a box drawn where something was last known to be.
 ///
-/// A painter rather than a `Border`, because Flutter's borders are solid and there is no dash
-/// anywhere else in the app to reach for. The shape is the same rounded rectangle the solid box
-/// uses, walked with [Path.computeMetrics] and stroked in `_dash`-long pieces — so the two states
-/// differ in exactly one property and a box does not appear to move or resize when it goes stale.
+/// A painter rather than a `Border`, because Flutter's borders are solid. The shape is the same
+/// rounded rectangle the solid box uses, stroked in `_dash`-long pieces by [dashedRRectPath] — so
+/// the two states differ in exactly one property and a box does not appear to move or resize when
+/// it goes stale.
 class _DashedBox extends CustomPainter {
   const _DashedBox(this.colour);
 
@@ -446,29 +446,22 @@ class _DashedBox extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final outline = Path()
-      ..addRRect(
-        RRect.fromRectAndRadius(
-          // Inset by half the stroke so the dashes sit where the solid border's 1.5px sits, rather
-          // than straddling the edge and reading as a size change.
-          Offset.zero & size,
-          const Radius.circular(5),
-        ).deflate(0.75),
-      );
-
     final paint = Paint()
       ..color = colour
       ..strokeWidth = 1.5
       ..style = PaintingStyle.stroke;
 
-    for (final metric in outline.computeMetrics()) {
-      for (var at = 0.0; at < metric.length; at += _dash + _gap) {
-        canvas.drawPath(
-          metric.extractPath(at, math.min(at + _dash, metric.length)),
-          paint,
-        );
-      }
-    }
+    canvas.drawPath(
+      dashedRRectPath(
+        // Inset by half the stroke so the dashes sit where the solid border's 1.5px sits, rather
+        // than straddling the edge and reading as a size change. The corner comes in with it.
+        (Offset.zero & size).deflate(0.75),
+        5 - 0.75,
+        dash: _dash,
+        gap: _gap,
+      ),
+      paint,
+    );
   }
 
   @override

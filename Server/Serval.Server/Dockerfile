@@ -110,6 +110,12 @@ RUN dotnet publish Server/Serval.Server/Serval.Server.csproj \
         ${SERVAL_VERSION:+-p:VersionPrefix=$SERVAL_VERSION} \
         ${SOURCE_REVISION:+-p:SourceRevisionId=$SOURCE_REVISION}
 
+# The publish carries every platform's libSkiaSharp because nothing sets a RuntimeIdentifier — 20
+# copies and three Windows symbol files, 466 MB, for a linux/amd64 image that loads one 12 MB file.
+# Only SkiaSharp's are removed: the host never probes another RID's folder, so the rest are dead
+# weight too, but they are not this line's to change.
+RUN find /app/runtimes -name 'libSkiaSharp*' -not -path '/app/runtimes/linux-x64/*' -delete
+
 # ---- Edge TPU natives ----
 #
 # Carried by every image, loaded only when Serval:Ai:Detection:Device selects tflite-edgetpu.
@@ -240,17 +246,17 @@ COPY CameraModule/Serval.CameraModule/models/silero_vad.onnx ./models-seed/siler
 # one. LLamaSharp picks a runtimes/linux-x64/native/ folder by CPU feature detection — avx2 on both
 # typical deployment hosts — and never picks vulkan/. The ggml backend registry lives in libggml.so, and
 # only vulkan/'s copy references ggml_backend_vk_reg; the avx copies register the CPU and nothing
-# else. libllama.so is byte-identical across all of them, so it pulls libggml-vulkan.so in as a
-# DT_NEEDED either way — the library loads, sits mapped, and its registration function is never
-# called. Symptom: "CLIP using CPU backend" and no /dev/dri fd, while the log reports gpuLayers=99
-# and the status page looks healthy.
+# else. libllama.so is byte-identical across all of them, and only vulkan/'s libggml.so carries
+# libggml-vulkan.so as a DT_NEEDED, so from avx2/ the Vulkan backend is never loaded at all.
+# Symptom: "CLIP using CPU backend" and no /dev/dri fd, while the log reports gpuLayers=99 and the
+# status page looks healthy.
 #
 # Overlaying rather than pointing LLamaSharp at vulkan/ wholesale, because that folder ships no
 # libggml-cpu.so — it carries the registry, not the CPU kernels, which stay per-variant and must
 # keep matching the folder they live in.
 #
-# libggml-vulkan.so is 62 MB and hard-linked; copying it four times would add a quarter gigabyte to
-# the image for four identical files. libggml.so is 55 KB and copied, so the replacement is plain.
+# libggml-vulkan.so is 52 MB and hard-linked; copying it four times would add 200 MB to the image
+# for four identical files. libggml.so is 55 KB and copied, so the replacement is plain.
 # A symlink would be smaller still and is wrong: glibc expands $ORIGIN from the resolved path, so the
 # link would pull libggml-base.so out of vulkan/ and reintroduce the two-registry split fixed here.
 #

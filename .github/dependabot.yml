@@ -31,6 +31,11 @@ updates:
     # and its backend must move together, so a major will arrive as two pull requests and one will
     # fail to build until the other lands.
     groups:
+      # Every update type, majors included, and ahead of the catch-all so it claims these first.
+      # SkiaSharp checks its native library's version at runtime, on first use, so a managed/native
+      # pair that drifted apart builds clean and fails only once a frame is decoded.
+      skiasharp:
+        patterns: ["SkiaSharp*"]
       dotnet:
         patterns: ["*"]
         update-types: ["minor", "patch"]
@@ -42,11 +47,6 @@ updates:
       # up bound to a different libonnxruntime.so than the ASR path, silently and with no error at
       # any verbosity.
       - dependency-name: "Microsoft.ML.OnnxRuntime.Managed"
-      # Majors only. 4.0 gates the compile on a Six Labors license key being present on the build
-      # machine, which a source-built project cannot ask of the people who clone it — see the note
-      # in Shared/Serval.Ai/Serval.Ai.csproj. 3.1.x patches are still wanted.
-      - dependency-name: "SixLabors.ImageSharp"
-        update-types: ["version-update:semver-major"]
       # Majors only. Microsoft.AspNetCore.OpenApi 10.x declares [2.7.5, 3.0.0): its source generator
       # cannot compile against 3.x, so a 3.x bump fails with CS0200 in generated code and no edit
       # here can fix it — see the note in Server/Serval.Server/Serval.Server.csproj. 2.x is wanted.
