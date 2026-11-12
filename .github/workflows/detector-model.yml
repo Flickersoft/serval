@@ -1,0 +1,79 @@
+# Exports the object-detection model the server image ships with — Ultralytics YOLO26n, stock
+# COCO-80, end-to-end head — and publishes it as a release of its own, so no deployment has to run
+# the export or pull the ultralytics image.
+#
+# Run by hand, once per model version. An export is not byte-reproducible, so the published files
+# ARE the model: after a run, copy the two sha256 values from the job summary into the
+# DETECTOR_*_SHA256 build args in Server/Serval.Server/Dockerfile. A tag that already exists is
+# refused rather than overwritten — a new export gets a new tag.
+#
+# The release is a prerelease and never "latest": deploy/compose.yaml is fetched from
+# releases/latest, which has to stay the newest server release.
+#
+# Ultralytics and the YOLO26n weights are AGPL-3.0, the same license as Serval.
+name: detector-model
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish the export under
+        required: true
+        default: detector-yolo26n-1
+      ultralytics:
+        description: ultralytics version to export with
+        required: true
+        default: "8.4.20"
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # CPU-only torch: the export needs no GPU, and the default CUDA wheels are several GB.
+      - name: Install ultralytics
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
+          pip install "ultralytics==${{ inputs.ultralytics }}" onnx onnxslim
+
+      - name: Export
+        env:
+          MODEL_DIR: ${{ runner.temp }}/models
+          ULTRALYTICS_LOCAL: "1"
+        run: bash scripts/export-detector.sh
+
+      - name: Checksums
+        working-directory: ${{ runner.temp }}/models/detect
+        run: |
+          sha256sum model.onnx labels.txt | tee SHA256SUMS
+          {
+            echo "### Detector export ${{ inputs.tag }}"
+            echo
+            echo "Paste into Server/Serval.Server/Dockerfile:"
+            echo
+            echo '```'
+            echo "ARG DETECTOR_RELEASE=${{ inputs.tag }}"
+            echo "ARG DETECTOR_ONNX_SHA256=$(sha256sum model.onnx | cut -d' ' -f1)"
+            echo "ARG DETECTOR_LABELS_SHA256=$(sha256sum labels.txt | cut -d' ' -f1)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish
+        working-directory: ${{ runner.temp }}/models/detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.tag }}" model.onnx labels.txt SHA256SUMS \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Object detector: YOLO26n (${{ inputs.tag }})" \
+            --prerelease --latest=false \
+            --notes "Ultralytics YOLO26n, stock COCO-80, exported to ONNX (end-to-end head, dynamic input) with ultralytics ${{ inputs.ultralytics }} by scripts/export-detector.sh at ${{ github.sha }}. The server image carries these files; this release is where its build fetches them from. AGPL-3.0, as are the original weights."
