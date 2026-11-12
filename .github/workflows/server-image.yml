@@ -1,5 +1,5 @@
 # Builds the Server container and pushes it to GHCR, where deployments pull it from
-# (see deploy/docker-compose.yml).
+# (see deploy/compose.yaml).
 name: server-image
 
 on:
@@ -72,7 +72,7 @@ jobs:
           images: ${{ env.IMAGE }}
           # Two streams. A tag push is a release and takes the three tags an unpinned, a
           # minor-pinned and an exactly-pinned deployment follow:
-          #   latest      moves to the newest release — what deploy/docker-compose.yml defaults to
+          #   latest      moves to the newest release — what deploy/compose.yaml defaults to
           #   0.4         moves within a minor — patches arrive, the shape does not change
           #   0.4.2       one release, never rewritten
           #

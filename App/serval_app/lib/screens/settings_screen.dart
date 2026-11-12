@@ -1,16 +1,19 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:phosphor_icons/phosphor_icons.dart';
 
 import '../data/providers.dart';
 import '../data/serval_api.dart';
 import '../data/serval_repository.dart';
+import '../data/server_restart.dart';
 import '../models/server_settings.dart';
 import '../theme/app_theme.dart';
 import '../theme/nocturne.dart';
 import '../theme/serval_tokens.dart';
 import '../widgets/compact_app_bar.dart';
 import '../widgets/label_chips.dart';
+import '../widgets/nocturne_button.dart';
 import '../widgets/nocturne_select.dart';
 import '../widgets/nocturne_toggle.dart';
 import '../widgets/paired_rows.dart';
@@ -107,6 +110,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  bool _restarting = false;
+
+  /// Restarts the Server, waits for it to answer, then re-reads the settings so the restart marks
+  /// clear.
+  Future<void> _restart() async {
+    if (_restarting) return;
+    setState(() {
+      _restarting = true;
+      _error = null;
+    });
+    try {
+      final problem = await restartServerAndWait(_repository);
+      if (!mounted) return;
+      if (problem != null) {
+        setState(() => _error = problem);
+      } else {
+        await _load();
+      }
+    } on ServalApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _restarting = false);
+    }
+  }
+
   bool _pending(String key) => _draft.containsKey(key);
 
   /// The value a field should show: what is staged if anything is, otherwise what the Server says.
@@ -152,6 +180,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       onReset: _reset,
       onSave: _save,
       onDiscard: () => setState(_draft.clear),
+      onRestart: _restart,
+      restarting: _restarting,
       // PUT /api/settings is Admin-only; the read is not.
       readOnly: !ref.watch(isAdminProvider),
     ),
@@ -176,11 +206,18 @@ class SettingsScreenBody extends StatefulWidget {
     required this.onSave,
     required this.onDiscard,
     this.inapplicable = _alwaysApplies,
+    this.onRestart,
+    this.restarting = false,
     this.error,
     this.saving = false,
     this.changedCount = 0,
     this.readOnly = false,
   });
+
+  /// Restarts the Server to apply the settings waiting on one. Null hides the offer, which is what
+  /// the widget tests that do not model a restart get.
+  final VoidCallback? onRestart;
+  final bool restarting;
 
   /// Show the settings without offering to change any of them.
   ///
@@ -339,6 +376,29 @@ class _SettingsScreenBodyState extends State<SettingsScreenBody> {
               message: message,
               critical: true,
               padding: const EdgeInsets.all(14),
+            ),
+            const SizedBox(height: 14),
+          ],
+          if (!widget.readOnly &&
+              widget.onRestart != null &&
+              (restartPending.isNotEmpty || widget.restarting)) ...[
+            VitalsAlertStrip(
+              message: widget.restarting
+                  ? 'Restarting the Server — this page picks up again when it '
+                        'answers.'
+                  : restartPending.length == 1
+                  ? 'One saved setting takes effect when the Server restarts.'
+                  : '${restartPending.length} saved settings take effect when '
+                        'the Server restarts.',
+              critical: false,
+              boxed: true,
+              padding: const EdgeInsets.all(14),
+              action: NocturneButton(
+                label: widget.restarting ? 'Restarting…' : 'Restart now',
+                icon: PhosphorIconsRegular.arrowClockwise,
+                variant: NocturneButtonVariant.primary,
+                onPressed: widget.restarting ? null : widget.onRestart,
+              ),
             ),
             const SizedBox(height: 14),
           ],

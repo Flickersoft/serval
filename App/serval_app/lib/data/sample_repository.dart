@@ -14,6 +14,7 @@ import '../media/media_saver.dart';
 import '../models/google_home.dart';
 import '../models/ptz.dart';
 import '../models/push.dart';
+import '../models/ai_models.dart';
 import '../models/server_settings.dart';
 import '../models/system_stats.dart';
 import '../models/user_preferences.dart';
@@ -1423,6 +1424,61 @@ class SampleServalRepository implements ServalRepository {
   @override
   Future<ServerSettings> updateSettings(Map<String, Object?> changes) async =>
       _settings;
+
+  /// Nothing to restart. Returns at once, and the settings it reports afterwards are unchanged.
+  @override
+  Future<void> restartServer() async {}
+
+  /// The same five packs a fresh Server offers, detection already installed. Installing is
+  /// reported back unchanged, as [updateSettings] is: there is no Server here to download to.
+  @override
+  Future<AiModelsStatus> aiModels() async => _aiModels;
+
+  @override
+  Future<AiModelsStatus> installAiModels(List<String> packs) async => _aiModels;
+
+  static const _aiModels = AiModelsStatus(
+    packs: [
+      AiModelPack(
+        id: 'detection',
+        name: 'Object detection',
+        description:
+            'People, vehicles and animals, tracked across frames — YOLO26n. Ships inside the '
+            'server image.',
+        downloadBytes: 0,
+        installed: true,
+        enabled: true,
+      ),
+      AiModelPack(
+        id: 'speech',
+        name: 'Speech',
+        description: 'Transcripts of what is said, with emotion — SenseVoice.',
+        downloadBytes: 1047870769,
+      ),
+      AiModelPack(
+        id: 'speaker',
+        name: 'Speaker labels',
+        description: 'Which voice is which within a conversation.',
+        downloadBytes: 35239608,
+        requires: ['speech'],
+      ),
+      AiModelPack(
+        id: 'sound',
+        name: 'Sound events',
+        description:
+            '527 kinds of sound — breaking glass, alarms, a barking dog.',
+        downloadBytes: 111034072,
+      ),
+      AiModelPack(
+        id: 'scene',
+        name: 'Scene descriptions',
+        description:
+            'A vision-language model writes what is happening in a scene.',
+        downloadBytes: 2279480352,
+        memory: '~2.9 GB of memory once loaded',
+      ),
+    ],
+  );
 
   static const _driveway = Camera(
     id: 'driveway',

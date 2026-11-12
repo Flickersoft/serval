@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Configuration.Memory;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
@@ -80,6 +81,7 @@ builder.Services.AddSingleton(settingsStore);
 builder.Services.AddSingleton(settingsSource.Provider);
 builder.Services.AddSingleton<ISettingChoiceProbe, DetectionDeviceAvailability>();
 builder.Services.AddSingleton<SettingsReader>();
+builder.Services.AddSingleton<ModelInstaller>();
 
 builder.Services.Configure<ServerOptions>(builder.Configuration.GetSection(ServerOptions.SectionName));
 
@@ -87,10 +89,10 @@ var serverOptions = builder.Configuration
     .GetSection(ServerOptions.SectionName)
     .Get<ServerOptions>() ?? new ServerOptions();
 
-// Unlike Serval:ApiKey, there is no safe empty value here: every route except telemetry ingest
-// now requires a logged-in user, so a server that cannot sign or verify a token is a server that
-// cannot do anything useful. Refusing to start is the deviation from this file's usual
-// warn-and-run-degraded posture (see the AI model checks below) — there is no degraded mode to run in.
+// Every route except telemetry ingest requires a logged-in user, so a server that cannot sign or
+// verify a token cannot do anything useful. Unset, the key is generated once and kept in MongoDB
+// (SigningKeyStore), which is what lets a compose file with no .env be a working deployment. Set,
+// it is the operator's and has to be a real one: a placeholder or a short value refuses to start.
 //
 // The placeholder check runs first so the message is the true one. A published `CHANGE-ME` fails
 // the length test too, and being told to write something longer sends an operator looking for a
@@ -98,14 +100,31 @@ var serverOptions = builder.Configuration
 PlaceholderCredentials.ThrowIfPlaceholder(
     serverOptions.Auth.SigningKey,
     "Serval:Auth:SigningKey",
-    "Generate one with `openssl rand -base64 32` and set it before starting.");
+    "Generate one with `openssl rand -base64 32` and set it, or leave it unset and the server "
+    + "generates and stores its own.");
 
-if (string.IsNullOrWhiteSpace(serverOptions.Auth.SigningKey) || serverOptions.Auth.SigningKey.Length < 32)
+bool signingKeyGenerated = false;
+if (string.IsNullOrWhiteSpace(serverOptions.Auth.SigningKey))
+{
+    string generatedKey = new SigningKeyStore(
+        builder.Configuration.GetSection("Serval:Mongo").Get<MongoOptions>() ?? new MongoOptions())
+        .LoadOrCreate();
+
+    // Layered last, after the settings overlay, so every reader of Serval:Auth:SigningKey — the JWT
+    // bearer snapshot and TokenService's options monitor alike — sees the one value.
+    configuration.Add(new MemoryConfigurationSource
+    {
+        InitialData = new Dictionary<string, string?> { ["Serval:Auth:SigningKey"] = generatedKey },
+    });
+    serverOptions.Auth.SigningKey = generatedKey;
+    signingKeyGenerated = true;
+}
+else if (serverOptions.Auth.SigningKey.Length < 32)
 {
     throw new InvalidOperationException(
-        "Serval:Auth:SigningKey must be set to a random secret of at least 32 characters — "
-        + "generate one with `openssl rand -base64 32`. The server cannot issue or verify a login "
-        + "token without it.");
+        "Serval:Auth:SigningKey must be a random secret of at least 32 characters — generate one "
+        + "with `openssl rand -base64 32`, or leave it unset and the server generates and stores its "
+        + "own. The server cannot issue or verify a login token without it.");
 }
 
 // Empty stays legal — AdminBootstrap warns and skips, which is the right answer for a server whose
@@ -339,7 +358,10 @@ if (serverOptions.ServerAi.Enabled)
         o.Ai.Speaker.ConversationAudioDirectory =
             Path.Combine(o.Media.Root, o.ServerAi.ConversationAudioRoot));
 
-    if (serverOptions.Ai.Asr is { } asr && File.Exists(asr.ModelPath))
+    // The VAD is checked with the ASR model because each audio session constructs it: present ASR
+    // with an absent VAD would be a session that throws, restarts and throws again, per camera,
+    // forever, rather than a capability this server plainly does not have.
+    if (serverOptions.Ai.Asr is { } asr && File.Exists(asr.ModelPath) && File.Exists(serverOptions.Ai.Vad.ModelPath))
     {
         builder.Services.AddSingleton(sp => new SenseVoiceAnalyzer(
             sp.GetRequiredService<IOptions<ServerOptions>>().Value.Ai.Asr,
@@ -350,9 +372,21 @@ if (serverOptions.ServerAi.Enabled)
         // Refusing to start would take recording down with it, so the server runs without the
         // capability instead — and says so, rather than silently producing no transcripts.
         startupWarnings.Add(
-            $"Server AI: ASR model not found at '{serverOptions.Ai.Asr.ModelPath}'. Audio detection "
-            + "is disabled; run scripts/fetch-models.sh (or the deploy compose's fetch-models "
-            + "one-shot) and point Serval:Ai:Asr at the result.");
+            $"Server AI: speech model or VAD not found at '{serverOptions.Ai.Asr.ModelPath}' / "
+            + $"'{serverOptions.Ai.Vad.ModelPath}'. Audio detection is disabled; download the speech "
+            + "model under Settings → AI (or run the fetch-models one-shot).");
+    }
+
+    // Same reasoning for speaker labels: each audio session builds its own labeller, which throws on
+    // a missing file. Turned off here, once, with a warning that names the files.
+    if (serverOptions.Ai.Speaker is { Enabled: true } speaker
+        && !(File.Exists(speaker.EmbeddingModelPath) && File.Exists(speaker.SegmentationModelPath)))
+    {
+        startupWarnings.Add(
+            $"Server AI: speaker models not found at '{speaker.EmbeddingModelPath}' / "
+            + $"'{speaker.SegmentationModelPath}'. Speaker labels are disabled; download them under "
+            + "Settings → AI (or run the fetch-models one-shot).");
+        builder.Services.PostConfigure<ServerOptions>(o => o.Ai.Speaker.Enabled = false);
     }
 
     if (serverOptions.Ai.Sound.Enabled)
@@ -373,8 +407,8 @@ if (serverOptions.ServerAi.Enabled)
             // server does not have, not a reason to stop recording.
             startupWarnings.Add(
                 $"Server AI: audio tagging model or labels not found at '{sound.ModelPath}' / "
-                + $"'{sound.LabelsPath}'. Sound event detection is disabled; run "
-                + "scripts/fetch-models.sh and point Serval:Ai:Sound at the result.");
+                + $"'{sound.LabelsPath}'. Sound event detection is disabled; download it under "
+                + "Settings → AI (or the fetch-models one-shot), or point Serval:Ai:Sound at your own copy.");
         }
     }
 
@@ -403,8 +437,8 @@ if (serverOptions.ServerAi.Enabled)
             // a capability this server does not have, not a reason to stop recording.
             startupWarnings.Add(
                 $"Server AI: vision model or projector not found at '{vision.ModelPath}' / "
-                + $"'{vision.MmprojPath}'. Scene description is disabled; run "
-                + "scripts/fetch-models.sh and point Serval:Ai:Vision at the result.");
+                + $"'{vision.MmprojPath}'. Scene description is disabled; download it under "
+                + "Settings → AI (or the fetch-models one-shot), or point Serval:Ai:Vision at your own copy.");
         }
     }
 
@@ -436,8 +470,8 @@ if (serverOptions.ServerAi.Enabled)
         {
             startupWarnings.Add(
                 $"Server AI: object detection is disabled because {detectionProblem}. Cameras fall "
-                + "back to the motion gate; export a model with scripts/export-detector.sh (or the "
-                + "deploy compose's export-detector one-shot) and point Serval:Ai:Detection at it.");
+                + "back to the motion gate; install the bundled model under Settings → AI, or export "
+                + "your own with scripts/export-detector.sh and point Serval:Ai:Detection at it.");
         }
     }
 
@@ -674,6 +708,14 @@ foreach (string warning in startupWarnings)
     startupLogger.LogWarning("{Warning}", warning);
 }
 
+if (signingKeyGenerated)
+{
+    startupLogger.LogInformation(
+        "Serval:Auth:SigningKey is not set, so login tokens are signed with the key this server "
+        + "generated and stored in MongoDB ({Collection}). Set it to supply your own.",
+        ServerSecretDocument.CollectionName);
+}
+
 // Which transcode targets this host can actually reach, named up front. Without it, "why was my
 // transcode rejected?" costs an ffmpeg invocation and a guess about which encoder the
 // HwAccelDevice/Encoder precedence picked.
@@ -771,6 +813,7 @@ app.MapCastEndpoints();
 app.MapPtzEndpoints();
 app.MapOnvifEndpoints();
 app.MapSystemEndpoints();
+app.MapModelEndpoints();
 app.MapSettingsEndpoints();
 app.MapPreferencesEndpoints();
 app.MapPushEndpoints();

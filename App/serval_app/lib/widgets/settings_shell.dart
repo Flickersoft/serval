@@ -28,6 +28,7 @@ class SettingsShell extends ConsumerWidget {
     final selected = switch (GoRouterState.of(context).uri.path) {
       '/settings/users' => SettingsSection.users,
       '/settings/server' => SettingsSection.server,
+      '/settings/ai' => SettingsSection.ai,
       '/settings/cameras' => SettingsSection.cameras,
       '/settings/notifications' => SettingsSection.notifications,
       '/settings/account' => SettingsSection.account,

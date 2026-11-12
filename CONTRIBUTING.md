@@ -102,7 +102,7 @@ cd App/serval_app && flutter run -d chrome
 ```
 
 `Server/docker-compose.yml` is the developer container stack — it builds the image from the
-working tree, where [deploy/docker-compose.yml](deploy/docker-compose.yml) pulls the published
+working tree, where [deploy/compose.yaml](deploy/compose.yaml) pulls the published
 one.
 
 **Do not point tests at a live deployment.** Run your own Server instance.

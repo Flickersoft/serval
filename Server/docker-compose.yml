@@ -1,5 +1,5 @@
 # Serval Server + MongoDB — the DEVELOPER stack: it builds the image from this working tree.
-# To deploy the released image instead, start from deploy/docker-compose.yml at the repo root.
+# To deploy the released image instead, start from deploy/compose.yaml at the repo root.
 #
 # The two rules that matter for this workload (see the deployment notes in the README) are baked
 # in here: named volumes so continuous segment writes and the database never touch the

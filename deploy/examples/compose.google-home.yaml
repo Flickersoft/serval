@@ -1,0 +1,41 @@
+# Cameras in Google Home and the app's Cast button — an override for ../compose.yaml. Read
+# Docs/google-home.md first: this needs the server reachable INBOUND from the internet over HTTPS
+# with a real certificate, and a Nest Hub on the same LAN as go2rtc. Most deployments cannot use it.
+#
+# Copy this file beside compose.yaml, set the values below in a .env there, and start with both:
+#
+#   docker compose -f compose.yaml -f compose.google-home.yaml up -d
+#
+# Every value defaults to empty and empty keeps the integration closed. The client id and secret
+# are values you generate (`openssl rand -base64 32`), not values Google gives you — the client id
+# is a secret here, the only thing deciding whose Google account may link to this server.
+
+services:
+  server:
+    environment:
+      Serval__GoogleHome__Enabled: ${SERVAL_GOOGLE_ENABLED:-false}
+      Serval__GoogleHome__PublicBaseUrl: ${SERVAL_GOOGLE_PUBLIC_BASE_URL:-}
+      Serval__GoogleHome__ProjectId: ${SERVAL_GOOGLE_PROJECT_ID:-}
+      Serval__GoogleHome__ClientId: ${SERVAL_GOOGLE_CLIENT_ID:-}
+      Serval__GoogleHome__ClientSecret: ${SERVAL_GOOGLE_CLIENT_SECRET:-}
+
+      # Optional, and the one file Google does give you: a HomeGraph service-account key. Without
+      # it Google does not hear about a camera you added or renamed until you re-link. Put the
+      # JSON at ./secrets/homegraph.json and set SERVAL_GOOGLE_HOMEGRAPH_KEY=/app/secrets/homegraph.json.
+      Serval__GoogleHome__HomeGraphKeyPath: ${SERVAL_GOOGLE_HOMEGRAPH_KEY:-}
+
+      # Optional. A PIN turns on the Home app's per-camera switch, asked for only when switching a
+      # camera OFF. Unset, the switch is not offered at all — the safe default.
+      Serval__GoogleHome__VerificationPin: ${SERVAL_GOOGLE_VERIFICATION_PIN:-}
+
+      # Optional, and what puts cameras on a television: the Cast application registered against
+      # https://<your-serval>/api/google/camerastream/receiver. Unset, there is no Cast button.
+      Serval__GoogleHome__CastReceiverAppId: ${SERVAL_GOOGLE_CAST_RECEIVER_APP_ID:-}
+
+      # The tallest a cast *recording* is transcoded to. At 2160p a four-second segment is 9.4 MB
+      # and needs ~27 Mbit/s sustained through your public address; at 1080p it is 2.5 MB and about
+      # 6 Mbit/s. Live casting is WebRTC and never transcoded.
+      Serval__GoogleHome__CastMaxHeight: ${SERVAL_GOOGLE_CAST_MAX_HEIGHT:-1080}
+    volumes:
+      # Read-only: nothing here should ever write a credential back.
+      - ./secrets:/app/secrets:ro

@@ -18,6 +18,7 @@ import '../screens/mask_editor_screen.dart';
 import '../screens/notifications_screen.dart';
 import '../screens/server_screen.dart';
 import '../screens/settings_index_screen.dart';
+import '../screens/ai_models_screen.dart';
 import '../screens/settings_screen.dart';
 import '../screens/users_screen.dart';
 import '../screens/wall_screen.dart';
@@ -235,6 +236,11 @@ GoRouter buildServalRouter({required AuthController? auth}) => GoRouter(
               pageBuilder: (context, state) =>
                   const NoTransitionPage(child: SettingsScreen()),
             ),
+            GoRoute(
+              path: '/settings/ai',
+              pageBuilder: (context, state) =>
+                  const NoTransitionPage(child: AiModelsScreen()),
+            ),
             // What the Server is doing, as against what it is told to do. This was `/settings/server`
             // while it was the only server-wide page; the settings that can be *changed* took that
             // path when they arrived, since that is the one people go looking for.
@@ -276,6 +282,7 @@ GoRouter buildServalRouter({required AuthController? auth}) => GoRouter(
 /// but a page that renders and then fills with 403s is a worse answer than not opening it.
 const _adminOnlyRoutes = {
   '/settings/users', // every /api/auth/users route is Admin-only
+  '/settings/ai', // so is /api/ai/models
   '/settings/cameras/masks', // saves the camera, so it is a camera write
 };
 

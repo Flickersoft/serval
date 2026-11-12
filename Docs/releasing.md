@@ -68,10 +68,10 @@ The build to put in front of a person already exists. The push that merged the c
 stamped into it. So there is nothing to build and nothing to wait for:
 
 ```bash
-cd deploy
-cp .env.example .env               # first run only; fill in the two secrets
-echo "SERVAL_IMAGE=ghcr.io/flickersoft/serval-server:sha-${sha:0:7}" >> .env
-docker compose up -d               # http://localhost:8080/
+mkdir -p /tmp/serval-rc && cd /tmp/serval-rc
+cp <checkout>/deploy/compose.yaml .     # the candidate's own copy, as the release will attach it
+SERVAL_IMAGE=ghcr.io/flickersoft/serval-server:sha-${sha:0:7} docker compose up -d
+# http://localhost:8080/ — the first visit creates the admin, exactly as a new install's does
 ```
 
 On a stack you can throw away, not on a deployment you depend on. The whole reason to run a release
@@ -130,12 +130,30 @@ docker buildx imagetools inspect --format '{{.Manifest.Digest}}' ghcr.io/flicker
 ## 7. Cut the release
 
 ```bash
-gh release create v0.2.1 --repo Flickersoft/serval --generate-notes --verify-tag
+git show v0.2.1:deploy/compose.yaml > /tmp/compose.yaml
+gh release create v0.2.1 /tmp/compose.yaml --repo Flickersoft/serval --generate-notes --verify-tag
 ```
 
 `--generate-notes` lists the pull requests merged since the previous release, which is real content
 now that everything lands through one. `--verify-tag` fails on a typo instead of silently creating a
 release at a tag that does not exist.
+
+**`compose.yaml` is the install.** The README's quickstart fetches
+`releases/latest/download/compose.yaml`, so a release without it breaks every new install until the
+next one — and it is taken from the tag, not from a working tree, so the file and the image it
+defaults to (`:latest`, which this tag just moved) describe the same release. Releases that are not
+server releases — the detector model's, see below — are published as prereleases with
+`--latest=false`, so they never become the one that URL resolves to.
+
+### The bundled object detector
+
+The image carries a YOLO26n export, fetched at build from a release of its own against checksums in
+the Dockerfile. It changes almost never: only when the detector Serval is tuned against changes.
+Then run [detector-model.yml](../.github/workflows/detector-model.yml) by hand with a **new** tag
+(`detector-yolo26n-2`, …), copy the three `ARG DETECTOR_…` lines from the run's summary into
+[the Dockerfile](../Server/Serval.Server/Dockerfile), and land that like any other change. An export
+is not byte-reproducible, so the published files are the model; the workflow refuses an existing tag
+rather than replacing what released images were built against.
 
 ## Two rules that keep this from going wrong
 

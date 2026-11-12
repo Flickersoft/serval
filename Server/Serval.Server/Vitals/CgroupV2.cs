@@ -58,7 +58,7 @@ public static class CgroupV2
     /// The CPU ceiling from <c>cpu.max</c>, in cores. <c>"200000 100000"</c> is 2 cores;
     /// <c>"max 100000"</c> is unlimited and returns null.
     ///
-    /// Null is the *production* answer: no shipped compose file (<c>deploy/docker-compose.yml</c>
+    /// Null is the *production* answer: no shipped compose file (<c>deploy/compose.yaml</c>
     /// or the <c>deploy/examples/</c> files) sets a CPU limit, only a memory one. A missing file —
     /// which is what a bare host's cgroup root looks like — means the same thing and is handled by
     /// the caller passing null.

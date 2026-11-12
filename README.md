@@ -40,14 +40,17 @@ on your own hardware, with no cloud service and no external model server in the 
   it fired on, delivered as web push notifications if you want them.
 - **Saved clips** — independent MP4s with a frozen snapshot of that moment's telemetry, out of
   retention's reach.
+- **Ask an AI assistant** *(optional)* — a read-only [MCP](Docs/mcp.md) endpoint, so Claude,
+  Gemini, ChatGPT or any MCP client can answer "what happened at the front door this afternoon?"
+  from your cameras' detections, transcripts and scene descriptions.
 - **The rest of an NVR** — users and roles, per-camera settings with help text in the UI,
   configuration backup/restore, server vitals with GPU/accelerator load, an installable
   responsive web app served by the same container as the API.
 
-Every AI capability is **off until you add its model files** — a fresh install is a fast,
-dependable recorder first. And throughout, a capability either runs a real model or reports
-nothing: where the design asks for something no endpoint can supply, the UI says so rather than
-rendering a plausible number.
+Every AI capability is **off until you switch it on** under Settings → AI models, which downloads
+what it needs. A fresh install is a fast, dependable recorder first. And throughout, a capability
+either runs a real model or reports nothing: where the design asks for something no endpoint can
+supply, the UI says so rather than rendering a plausible number.
 
 | | | |
 |---|---|---|
@@ -57,9 +60,11 @@ rendering a plausible number.
 ## Why Serval
 
 - **Everything local.** No accounts, no cloud inference, no phoning home. The AGPL and your
-  firewall are the whole privacy policy. Two features can reach outward, both off unless you turn
-  them on: web push notifications, and [Google Home](Docs/google-home.md) — and even there no video
-  ever reaches Google, which only ever helps set the connection up.
+  firewall are the whole privacy policy. Three features can reach outward, all off unless you turn
+  them on: web push notifications; [Google Home](Docs/google-home.md), where no video ever reaches
+  Google, which only helps set the connection up; and [AI assistants](Docs/mcp.md), which do send
+  what they read — descriptions, transcripts, stills — to whoever runs the assistant. Model
+  downloads come from GitHub and Hugging Face, once, when you ask for them.
 - **One coherent stack.** A single container serves the API and the UI from the same origin;
   MongoDB and go2rtc ride alongside in one compose file. No plugin matrix, no separate frontend
   host, no CORS.
@@ -71,25 +76,26 @@ rendering a plausible number.
 
 You need Docker with Compose on an x86-64 host, and cameras that speak RTSP (or HTTP-FLV, RTMP,
 SRT). Linux is what is tested, and what the optional GPU and Coral acceleration require — see
-[Hardware support](#hardware-support). Two minutes to a recording NVR:
+[Hardware support](#hardware-support). A recorder runs in ~2 GB of memory, the full AI stack in
+8–10 GB ([sizing](#storage-and-sizing)). In an empty directory:
 
 ```bash
-git clone --depth 1 https://github.com/Flickersoft/serval.git
-cd serval/deploy
-cp .env.example .env
-# fill in the two secrets in .env — each has its generation command next to it
+curl -fsSLO https://github.com/Flickersoft/serval/releases/latest/download/compose.yaml
 docker compose up -d
 ```
 
-(No clone wanted? The three files `docker-compose.yml`, `.env.example` and `go2rtc.yaml` from
-[deploy/](deploy/) are all it needs.)
+That is the whole install: one file, nothing to edit, no `.env`.
 
-Open `http://<host>:8080/`, sign in with the admin account from `.env`, and add your first
-camera under **Settings → Cameras → Add camera**: give it a name and its stream URL
-(`rtsp://user:pass@camera-ip/...`), and tick which roles the stream carries — record, detect,
-live. There is no auto-discovery; you paste the URL, and ingest starts within seconds, no
-restart. For sub-second live view, set `SERVAL_WEBRTC_CANDIDATES` in `.env` to your host's LAN
-IP.
+1. Open `http://<host>:8080/`. The first visit asks you to **create the admin account**.
+2. Add a camera under **Settings → Cameras → Add camera**: give it a name and its stream URL
+   (`rtsp://user:pass@camera-ip/...`), and tick which roles the stream carries — record, detect,
+   live. There is no auto-discovery; you paste the URL, and ingest starts within seconds.
+3. Optionally, turn on the AI under **Settings → AI models** — see below.
+
+Live view connects over WebRTC at the address you opened Serval with, so on a LAN there is nothing
+to configure. Everything in [compose.yaml](deploy/compose.yaml) that you might want to change —
+retention, a memory ceiling, a pinned version — is a variable with a default, set in an optional
+`.env` beside it ([.env.example](deploy/.env.example) lists them).
 
 > **Serval is built for a trusted LAN.** It serves plain HTTP, and out of the box it allows any
 > browser origin and publishes its API documentation without a login. Do not put it directly on
@@ -102,27 +108,25 @@ as a stand-in, and the entire pipeline runs against it. See
 
 ## Enabling the AI
 
-Two one-shot commands from the `deploy/` directory — the first downloads the speech, sound,
-speaker and scene models (~3.5 GB; `SKIP_VISION=1` skips the 2.3 GB scene model), the second
-exports the object-detection model with its matching labels:
+**Settings → AI models**, tick what you want, press the button, then **Restart now** when it
+finishes. The server downloads the models into its own volume, switches them on, and loads them on
+restart:
 
-```bash
-docker compose --profile setup run --rm fetch-models
-```
+| Model | Download | What it adds |
+|---|---|---|
+| Object detection (YOLO26n) | included in the image | People, vehicles and animals, tracked into episodes |
+| Speech (SenseVoice) | 1.0 GB | Transcripts with emotion |
+| Speaker labels | 35 MB | Which voice is which; needs Speech |
+| Sound events | 111 MB | 527 sound classes: glass, alarms, dogs |
+| Scene descriptions (Qwen3-VL 2B) | 2.3 GB | A sentence about what is happening; ~2.9 GB of memory once loaded |
 
-```bash
-docker compose --profile setup run --rm export-detector
-```
+Each camera then chooses for itself which of these it uses, under its own settings. Detection
+boxes, scene descriptions and transcripts appear in the activity feed as they happen.
 
-Both write into `./models` as whoever owns that directory, so the weights stay yours to delete
-and re-fetch. Running them without a clone is the exception: Docker creates `./models` itself and
-owns it as root, so set `MODEL_UID`/`MODEL_GID` in `.env` to your `id -u`/`id -g` first.
-
-Then uncomment the clearly-marked AI block in `docker-compose.yml`, raise the memory limit as
-its comment says, and `docker compose up -d --force-recreate server`. Detection boxes, scene
-descriptions and transcripts appear in the activity feed as they happen. The full story — what
-each model costs on disk and CPU, and what to expect from small hosts — is in
-[Docs/deployment.md](Docs/deployment.md#enabling-the-ai).
+No browser at hand? `docker compose --profile setup run --rm fetch-models` beside `compose.yaml`
+downloads the same files (`SKIP_VISION=1` and friends leave models out); switch them on under
+Settings afterwards. What each model costs on disk and CPU, and what to expect from small hosts, is
+in [Docs/deployment.md](Docs/deployment.md#enabling-the-ai).
 
 ## Hardware support
 
@@ -164,16 +168,26 @@ Recordings dominate: budget **cameras × bitrate × retention days** for the med
 size retention to the disk. As anchors from real deployments: six cameras recording 4K main
 streams write roughly 300–400 GB a day — seven days needs about 2.5 TB; sub-stream-only
 recording is orders of magnitude less. MongoDB stays small but wants IOPS — on a multi-disk
-host put it on the fast disk and the media on the big one. Memory: ~2 GB recording-only, 8–10 GB
-with the full AI stack loaded — budget ~300 MB per camera on top of the models, and see
-[Docs/memory.md](Docs/memory.md) for the measurements and the host-level arithmetic.
+host put it on the fast disk and the media on the big one.
+
+Memory, measured on an Intel N100 with seven cameras ([Docs/memory.md](Docs/memory.md) has the
+arithmetic):
+
+| What is on | Server memory | Notes |
+|---|---|---|
+| Recording, replay, live view | ~2 GB | Plus ~300 MB per camera with detection on |
+| + every model except scene descriptions | between the two | The scene model alone is ~2.9 GB |
+| + scene descriptions (the full AI stack) | 8–10 GB | A GPU takes the scene model off the CPU, not out of memory |
 
 ## Security model
 
-Serval assumes a **trusted LAN** and degrades explicitly outside one. Secrets have no defaults —
-the server refuses to boot with a placeholder signing key or admin password, so a copied compose
-file cannot become somebody's open deployment. Camera credentials, however, are stored in clear
-in MongoDB today ([Server README — not done yet](Server/Serval.Server/README.md#not-done-yet)).
+Serval assumes a **trusted LAN** and degrades explicitly outside one. No secret ships in a file:
+the server generates its own token signing key on first boot and keeps it in MongoDB, and the
+admin account is created by whoever opens the App first — so **finish setup before the port is
+reachable by anyone else**, or set `SERVAL_ADMIN_PASSWORD` to have the account made at boot
+instead. A signing key or password you supply that is still a placeholder (`CHANGE-ME` and the
+like) refuses to boot. Camera credentials, however, are stored in clear in MongoDB today
+([Server README — not done yet](Server/Serval.Server/README.md#not-done-yet)).
 For remote access, terminate TLS at your own reverse proxy or use a VPN; browsers additionally
 gate talk-back, push notifications and encrypted session storage behind HTTPS, and the app tells
 you so where each is affected. WebRTC beyond the LAN needs a TURN server, which is not wired yet.

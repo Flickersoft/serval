@@ -39,7 +39,7 @@ public class CgroupV2Tests
     }
 
     /// <summary>
-    /// The production branch: no shipped compose file (deploy/docker-compose.yml or the
+    /// The production branch: no shipped compose file (deploy/compose.yaml or the
     /// deploy/examples/ files) sets a CPU limit — only a memory one — so "max" is what this
     /// actually reads on those deployments, and the denominator falls back to the host's core count.
     /// </summary>

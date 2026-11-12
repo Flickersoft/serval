@@ -4,7 +4,9 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Serval.Server.Ai;
 using Serval.Server.Alerts;
+using Serval.Server.Auth;
 using Serval.Server.Cameras;
 using Serval.Server.Cast;
 using Serval.Server.GoogleHome;
@@ -17,6 +19,7 @@ using Serval.Server.Ptz;
 using Serval.Server.Push;
 using Serval.Server.Recordings;
 using Serval.Server.Snapshots;
+using Serval.Server.Vitals;
 
 namespace Serval.Server.Tests;
 
@@ -514,6 +517,50 @@ public class EndpointRoutingTests
     /// Maps something onto a real <see cref="WebApplication"/> and forces the endpoint graph to be
     /// built, which is what throws if a handler cannot bind.
     /// </summary>
+    /// <summary>
+    /// The setup page's two routes are the only account routes a stranger may call, and only they.
+    /// Losing <c>.AllowAnonymous()</c> would put the first admin behind a login nobody can have yet;
+    /// gaining it anywhere else in the group would open that route to the network.
+    /// </summary>
+    [Fact]
+    public void OnlyLoginRefreshLogoutAndSetupAreAnonymous()
+    {
+        Dictionary<string, string> routes = Materialize(app => app.MapAuthEndpoints())
+            .OfType<RouteEndpoint>()
+            .Where(e => Authorization(e) == "(anonymous)")
+            .ToDictionary(e => $"{Verb(e)} /{e.RoutePattern.RawText?.Trim('/')}", Authorization, StringComparer.Ordinal);
+
+        Assert.Equal(
+            [
+                "GET /api/auth/setup",
+                "POST /api/auth/login",
+                "POST /api/auth/logout",
+                "POST /api/auth/refresh",
+                "POST /api/auth/setup",
+            ],
+            routes.Keys.Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// Downloading gigabytes onto the server and stopping it are both Admin acts. A Viewer reaching
+    /// either would be a denial of service from inside the household.
+    /// </summary>
+    [Fact]
+    public void ModelInstallAndRestartAreAdminOnly()
+    {
+        Dictionary<string, string> routes = Materialize(app =>
+            {
+                app.MapModelEndpoints();
+                app.MapSystemEndpoints();
+            })
+            .OfType<RouteEndpoint>()
+            .ToDictionary(e => $"{Verb(e)} /{e.RoutePattern.RawText?.Trim('/')}", Authorization, StringComparer.Ordinal);
+
+        Assert.Equal("Admin", routes["GET /api/ai/models"]);
+        Assert.Equal("Admin", routes["POST /api/ai/models/install"]);
+        Assert.Equal("Admin", routes["POST /api/system/restart"]);
+    }
+
     private static IReadOnlyList<Endpoint> Materialize(Action<IEndpointRouteBuilder> map)
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
@@ -546,6 +593,13 @@ public class EndpointRoutingTests
         builder.Services.AddSingleton<SmartHomeFulfillment>();
         builder.Services.AddSingleton<IGo2RtcClient, Go2RtcClient>();
         builder.Services.AddServalMcp();
+        builder.Services.AddSingleton<Storage.MongoContext>();
+        builder.Services.AddSingleton<Auth.UserRepository>();
+        builder.Services.AddSingleton<Auth.RefreshTokenRepository>();
+        builder.Services.AddSingleton<Auth.TokenService>();
+        builder.Services.AddSingleton<Auth.StreamTicketService>();
+        builder.Services.AddSingleton<Vitals.SystemStatsCollector>();
+        builder.Services.AddSingleton<Ai.ModelInstaller>();
 
         WebApplication app = builder.Build();
         map(app);

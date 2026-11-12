@@ -32,12 +32,21 @@ import 'source_link.dart';
 /// supported all three of the things on it — `PUT /api/auth/password` among them — and the App
 /// offered none of them, so the only way to change your own password was to ask an Admin to set one
 /// for you, which tells them what it is.
-enum SettingsSection { status, cameras, server, notifications, account, users }
+enum SettingsSection {
+  status,
+  cameras,
+  server,
+  ai,
+  notifications,
+  account,
+  users,
+}
 
 /// Where a section lives, so the sidebar and the drill-down index send you to the same address.
 String settingsPathFor(SettingsSection section) => switch (section) {
   SettingsSection.cameras => '/settings/cameras',
   SettingsSection.server => '/settings/server',
+  SettingsSection.ai => '/settings/ai',
   SettingsSection.status => '/settings/status',
   SettingsSection.notifications => '/settings/notifications',
   SettingsSection.account => '/settings/account',
@@ -173,6 +182,17 @@ class SettingsNav extends StatelessWidget {
       compact: compact,
       onTap: () => onSelect(SettingsSection.server),
     ),
+    // Admin-only, unlike the settings above: it downloads gigabytes onto the Server and switches
+    // capabilities on, and `/api/ai/models` refuses everyone else.
+    if (isAdmin)
+      _NavRow(
+        icon: PhosphorIconsRegular.sparkle,
+        activeIcon: PhosphorIconsFill.sparkle,
+        label: 'AI models',
+        selected: !compact && selected == SettingsSection.ai,
+        compact: compact,
+        onTap: () => onSelect(SettingsSection.ai),
+      ),
     // Never gated: these are the signed-in person's own switches, and a Viewer is exactly who
     // needs them — they cannot change what the cameras alert on, so narrowing what reaches them
     // is the only control over their own notifications they have.

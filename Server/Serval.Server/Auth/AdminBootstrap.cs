@@ -4,9 +4,10 @@ namespace Serval.Server.Auth;
 
 /// <summary>
 /// Creates the first Admin account on an empty <c>Users</c> collection, from
-/// <c>Serval:Auth:BootstrapAdminUsername</c>/<c>BootstrapAdminPassword</c> — the only way in,
-/// since there is no self-registration and no admin UI until an Admin already exists. Runs once
-/// at startup, after <c>MongoContext.InitializeAsync</c>, the same place <c>CameraRegistrySweep</c> runs.
+/// <c>Serval:Auth:BootstrapAdminUsername</c>/<c>BootstrapAdminPassword</c>, for a deployment that
+/// wants the account in place before anyone opens the App. Without them the setup page creates it
+/// instead (<see cref="FirstAdminSetup"/>). Runs once at startup, after
+/// <c>MongoContext.InitializeAsync</c>, the same place <c>CameraRegistrySweep</c> runs.
 /// </summary>
 public static class AdminBootstrap
 {
@@ -20,8 +21,9 @@ public static class AdminBootstrap
             // Ignored rather than reapplied — a stale BootstrapAdminPassword left in a compose
             // file must not silently reset a real admin's password on every restart. Same
             // treatment Program.cs already gives other config keys that are only safe to read once.
-            if (!string.IsNullOrEmpty(options.BootstrapAdminUsername)
-                || !string.IsNullOrEmpty(options.BootstrapAdminPassword))
+            // The password alone: compose files default the username to "admin", which says
+            // nothing about anyone having left a credential behind.
+            if (!string.IsNullOrEmpty(options.BootstrapAdminPassword))
             {
                 logger.LogWarning(
                     "Serval:Auth:BootstrapAdmin* is set but the Users collection already has "
@@ -35,12 +37,12 @@ public static class AdminBootstrap
         if (string.IsNullOrWhiteSpace(options.BootstrapAdminUsername)
             || string.IsNullOrWhiteSpace(options.BootstrapAdminPassword))
         {
-            // Not fatal: cameras should keep recording even with no admin configured yet. But
-            // this is impossible to miss, because it means the API is currently unusable.
+            // The normal first boot: the browser that opens the App first is sent to the setup page
+            // (FirstAdminSetup). Logged as a warning because until then nobody can sign in.
             logger.LogWarning(
-                "No user accounts exist, and Serval:Auth:BootstrapAdminUsername/BootstrapAdminPassword "
-                + "are not both set. Every endpoint except telemetry ingest and the liveness probe "
-                + "is unreachable until an Admin account exists. Set both and restart.");
+                "No user accounts exist yet. Open this server's address in a browser to create the "
+                + "first Admin account, or set Serval:Auth:BootstrapAdminUsername/BootstrapAdminPassword "
+                + "and restart to create it without the setup page.");
             return;
         }
 

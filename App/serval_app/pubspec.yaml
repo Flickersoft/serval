@@ -48,16 +48,16 @@ dependencies:
 
   # `dart:js_interop` bindings for the `<video>` element the web player drives.
   web: ^1.1.2
-  flutter_svg: ^2.3.0
+  flutter_svg: ^2.3.2
   flutter_secure_storage: ^11.2.0
 
   # Dependency injection, and nothing more ambitious than that — see lib/data/providers.dart for
   # what is and is not in the container, and why widgets/ stays prop-driven.
-  flutter_riverpod: ^3.4.3
+  flutter_riverpod: ^3.5.0
 
   # Real URLs on the web build: linkable routes, reload that lands where you were, a back button
   # that stays in the app. The route tree is in lib/router/.
-  go_router: ^18.1.1
+  go_router: ^18.1.3
 
   # The sparklines under the vitals meters. The one property this chart cannot get wrong is the
   # fiddly one: a sample the Server could not measure has to be a *break* in the line, never a dip
@@ -69,7 +69,7 @@ dependencies:
   # alike, so restoring takes one path where saving needs one per platform. Its constraints pin a
   # few transitive Windows-only packages to older versions — the reason `pub outdated` has
   # opinions — but none of those paths are taken on web or Linux.
-  file_picker: ^13.1.0
+  file_picker: ^13.3.2
 
   # Streaming a long export straight to disk on the web build. Its `saveAsStream` writes chunks
   # through the File System Access API instead of collecting them into a Blob, which is what makes
