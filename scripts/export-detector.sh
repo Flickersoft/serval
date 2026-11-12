@@ -4,10 +4,13 @@
 #
 #   MODEL_DIR=./models ./scripts/export-detector.sh
 #
-# Prefers the official ultralytics Docker image so no Python environment is needed; falls back
-# to a local ultralytics install. From a deploy/ directory the compose one-shot does the same:
+# Most deployments never need this: the server image carries the released export (see
+# .github/workflows/detector-model.yml, which runs this script), and Settings → AI or the
+# fetch-models one-shot copies it into place. This is for producing that release, or for exporting
+# a different model of your own.
 #
-#   docker compose --profile setup run --rm export-detector
+# Prefers the official ultralytics Docker image (~14 GB) so no Python environment is needed; falls
+# back to a local ultralytics install, and ULTRALYTICS_LOCAL=1 skips Docker even where it exists.
 #
 # labels.txt is written from the model's own class names, so the two cannot disagree — a
 # mismatched labels file names every detection wrongly forever, with no error anywhere.
@@ -30,9 +33,7 @@ if [ -f "$DETECT_DIR/model.onnx" ] && [ -f "$DETECT_DIR/labels.txt" ]; then
   exit 0
 fi
 
-# The same script as the export-detector one-shot in deploy/docker-compose.yml, which runs this
-# export without a checkout and so cannot reference a file here. The two are copies and have to
-# stay identical. Single-quoted, so no apostrophe may appear anywhere inside it.
+# Single-quoted, so no apostrophe may appear anywhere inside it.
 PYCODE='
 import os
 
@@ -81,7 +82,7 @@ finally:
     hand_back()
 '
 
-if command -v docker >/dev/null 2>&1; then
+if [ "${ULTRALYTICS_LOCAL:-0}" != "1" ] && command -v docker >/dev/null 2>&1; then
   echo "Exporting via $ULTRALYTICS_IMAGE ..."
   # The models root is mounted rather than detect/, because the script reads the ownership of the
   # root to decide who the export belongs to. Naming MODEL_UID/MODEL_GID without a value passes
