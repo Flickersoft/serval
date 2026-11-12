@@ -1,9 +1,18 @@
 # Deploying the Server
 
-**Start from [deploy/docker-compose.yml](../deploy/docker-compose.yml)** — the quickstart stack
-(server + MongoDB + the go2rtc sidecar for WebRTC), configured through a sibling `.env`. This
-document is the detail behind it: why the stack is shaped that way, and the levers that are not
-in the quickstart. Two tuned real-hardware references live in
+**Start from [deploy/compose.yaml](../deploy/compose.yaml)** — the whole stack (server +
+MongoDB + the go2rtc sidecar for WebRTC) in one file that runs unedited, with no `.env`. Every
+value worth changing is a `${VAR:-default}`, overridden from an optional `.env` beside it
+([.env.example](../deploy/.env.example) lists them). Each release attaches the file, so an install
+needs no clone:
+
+```bash
+curl -fsSLO https://github.com/Flickersoft/serval/releases/latest/download/compose.yaml
+docker compose up -d
+```
+
+This document is the detail behind it: why the stack is shaped that way, and the levers that are
+not in the quickstart. Two tuned real-hardware references, and the Google Home override, live in
 [deploy/examples/](../deploy/examples/README.md).
 
 The image itself is built by [the Dockerfile](../Server/Serval.Server/Dockerfile) (ASP.NET
@@ -33,11 +42,14 @@ missing. See [configuration.md](configuration.md#vitals). It grants reading perf
 counters for the whole machine, nothing else, and takes effect on `--force-recreate`.
 
 The **go2rtc** service publishes port `8666` (WebRTC media) and is reached by the server on its
-internal API port `1984`, which stays unpublished. The address browsers are told to reach the
-media port on is `SERVAL_WEBRTC_CANDIDATES` in the quickstart's `.env` (the host's LAN IP;
-comma-separate a second address for access from outside) — the compose file merges it into
-go2rtc's config on the command line, so [go2rtc.yaml](../deploy/go2rtc.yaml) itself never needs
-editing. See [live-view.md](live-view.md).
+internal API port `1984`, which stays unpublished. Its whole config is inline on its command line,
+so there is no config file. Browsers are told to send media to **the address they opened Serval
+at**, on port 8666: the server adds that candidate to every SDP answer it proxies
+(`Serval:WebRtc:CandidatePort`, 0 to stop), which is what makes live view work on a LAN with
+nothing set — go2rtc inside a bridge network only knows its container address, and drops it.
+`SERVAL_WEBRTC_CANDIDATES` adds more addresses, for viewers who reach the server by a name or
+address that is not the one media can use (a port-forwarded public IP, say). See
+[live-view.md](live-view.md).
 
 ```bash
 cd Server && docker compose up --build
@@ -122,51 +134,50 @@ Once it is up, `http://<host>:8080/` is the App — sign in and add cameras unde
 A fresh deployment records, replays and serves live view with no model files at all. Every AI
 capability is opt-in, each behind its own switch with `Serval__ServerAi__Enabled` as the master —
 and each loads only if its weights are present, so the order is: get the files, flip the
-switches, recreate the container.
+switches, restart.
 
-**1. Fetch the models** into the directory mounted at `/app/models`. From `deploy/`, without
-even a repo clone:
+**From the App: Settings → AI models.** Tick the models, press the button, then *Restart now*.
+The server runs its own copy of [fetch-models.sh](../scripts/fetch-models.sh) into the models
+volume with `SKIP_*` flags for what was not ticked, checks every file landed, writes the switches
+into the settings overlay, and the restart loads them. A download interrupted by a restart is
+resumed by asking again: the script skips whatever is already complete. It needs the models
+directory writable — the quickstart's named volume is; a deployment that mounts it `:ro`, as the
+[examples](../deploy/examples/README.md) do, gets told so on the page and uses the one-shot below.
+
+**Without a browser**, the same script as a compose one-shot, beside `compose.yaml`:
 
 ```bash
 docker compose --profile setup run --rm fetch-models
 ```
 
-(or `MODEL_DIR=./models ../scripts/fetch-models.sh` from a checkout). What that downloads, and
-what each file costs on disk:
+(or `MODEL_DIR=./models ./scripts/fetch-models.sh` from a checkout), then switch the models on
+under Settings, or with the environment variables in the table. What each costs:
 
-| Weights | Capability | Switch (`Serval__…`) | Disk |
-|---|---|---|---|
-| SenseVoice | transcription + emotion + audio events | on with `ServerAi__Enabled` | ~1.1 GB |
-| Silero VAD | speech gating for the above | (always, copied from the repo/image) | 2.3 MB |
-| Qwen3-VL-2B + mmproj | scene descriptions, clip summaries | `Ai__Vision__Enabled` | ~2.3 GB |
-| speaker embedding + pyannote | speaker labels + diarization | `Ai__Speaker__Enabled` | ~35 MB |
-| zipformer audio tagging | sound events (glass, alarms, dogs…) | `Ai__Sound__Enabled` | ~26 MB |
+| Weights | Capability | Switch (`Serval__…`) | Download | Disk |
+|---|---|---|---|---|
+| YOLO26n (`detect/`) | object detection | `Ai__Detection__Enabled` | none — in the image | ~11 MB |
+| SenseVoice | transcription + emotion + audio events | on with `ServerAi__Enabled` | 1.0 GB | ~230 MB |
+| Silero VAD | speech gating for the above | (with SenseVoice) | none — in the image | 2.3 MB |
+| speaker embedding + pyannote | speaker labels + diarization | `Ai__Speaker__Enabled` | 35 MB | ~36 MB |
+| zipformer audio tagging | sound events (glass, alarms, dogs…) | `Ai__Sound__Enabled` | 111 MB | ~26 MB |
+| Qwen3-VL-2B + mmproj | scene descriptions, clip summaries | `Ai__Vision__Enabled` | 2.3 GB | ~2.3 GB |
 
-`SKIP_VISION=1` (and `SKIP_SPEAKER`/`SKIP_SOUND`) trim the download for partial installs — a
-detection-only deployment does not need the 2.3 GB VLM.
+`SKIP_VISION=1`, `SKIP_SPEECH`, `SKIP_SPEAKER`, `SKIP_SOUND` and `SKIP_DETECTION` leave a model out.
+SenseVoice's archive carries an fp32 copy beside the int8 model that is actually loaded; the
+script deletes it after unpacking.
 
-**2. Export the object detector** — the one set of weights nothing downloads for you
-([why below](#the-object-detector)):
+**The detector ships in the image** — ~11 MB, exported once by
+[.github/workflows/detector-model.yml](../.github/workflows/detector-model.yml) and fetched at
+image build against pinned checksums ([why it is an export at all](#the-object-detector)).
+fetch-models copies it into place like the Silero VAD. To run a different model, export it with
+[scripts/export-detector.sh](../scripts/export-detector.sh) and point `Ai__Detection__ModelPath`
+and `LabelsPath` at it.
 
-```bash
-docker compose --profile setup run --rm export-detector
-```
-
-(or `MODEL_DIR=./models ../scripts/export-detector.sh`). Writes `detect/model.onnx` +
-`detect/labels.txt`, ~10 MB. Switch: `Ai__Detection__Enabled`.
-
-Both one-shots run as root — the server image has no unprivileged user — and each gives the
+The one-shot runs as root — the server image has no unprivileged user — and gives a bind-mounted
 models directory back to whoever owns it before exiting, including when it fails part-way, so the
-weights stay deletable by the person who fetched them. The one case with no ownership to copy is
-a deployment with no clone at all, where Docker created `./models` as root: set
-`MODEL_UID`/`MODEL_GID` in `.env` (your `id -u`/`id -g`). Running either script natively rather
-than through compose already writes as you, and the handback is skipped.
-
-**3. Flip the switches** — in the quickstart compose they are a commented block — and recreate:
-
-```bash
-docker compose up -d --force-recreate server
-```
+weights stay deletable by the person who fetched them. Where Docker created that directory itself
+and so owns it as root, set `MODEL_UID`/`MODEL_GID` (your `id -u`/`id -g`). The quickstart's named
+volume has no such owner and needs neither.
 
 **What to expect on CPU.** Detection at `onnx-cpu` costs ~44 ms/frame at two threads on a
 desktop core — fine for a handful of cameras at 1 fps, but an N100-class box running many
@@ -179,16 +190,30 @@ accounts the offloaded vision model outside the process.
 
 ## Secrets
 
-The Server refuses to start while `Serval__Auth__SigningKey` or `Serval__Auth__BootstrapAdminPassword`
-still reads `CHANGE-ME`. That is deliberate, and it is not only about weak values: this repository is
-public, so anything shipped in a compose file here is a value an attacker already has. The signing
-key is the sharp one — it is the HMAC key for every access and stream token, so someone who knows it
-mints an Admin token directly and never touches `/api/auth/login`, where the rate limiter and the
-account lockout live.
+**No secret is shipped in a file, and none has to be supplied.** The signing key is the sharp one —
+it is the HMAC key for every access and stream token, so someone who knows it mints an Admin token
+directly and never touches `/api/auth/login`, where the rate limiter and the account lockout live.
+Left unset, the server generates 32 random bytes on first boot and keeps them in MongoDB
+(collection `server_secrets`, outside the configuration backup), so it survives restarts and
+upgrades and is never written anywhere this repository can publish. Anyone who can read that
+collection can already read every account and camera credential beside it.
+
+Set `Serval__Auth__SigningKey` (`SERVAL_SIGNING_KEY`) to supply your own instead. A supplied value
+is held to the old rule: the server refuses to start while it reads `CHANGE-ME` or another
+placeholder, or is under 32 characters — this repository is public, so anything shipped in a
+compose file here is a value an attacker already has.
 
 ```bash
 openssl rand -base64 32
 ```
+
+**The first admin account is created in the browser.** While no account exists, opening the App
+shows *Create the admin account* instead of *Sign in*, and whoever completes it first owns the
+server — one request wins even if two arrive together, and the page is gone for good once any
+account exists. So finish it before the port is reachable by anyone you do not trust, or set
+`Serval__Auth__BootstrapAdminPassword` (`SERVAL_ADMIN_PASSWORD`, with `SERVAL_ADMIN_USERNAME`
+defaulting to `admin`) to have the account created at boot and the page never shown. That value
+is read only while there are no accounts, and refused at startup if it is a placeholder.
 
 `Serval__ApiKey` is the third secret and behaves differently: it is the shared secret a CameraModule
 presents when POSTing telemetry, and leaving it unset **closes** that route rather than opening it.
@@ -204,15 +229,12 @@ the HomeGraph service-account key — is a **file**, bind-mounted read-only and 
 `Serval__GoogleHome__HomeGraphKeyPath`, so it never passes through configuration or the API at all.
 It is a live Google credential: keep it wherever you keep the three above.
 
-Keep all three out of version control on any machine that is not your own. Compose reads a sibling
-`.env`, so this is enough:
-
-```yaml
-Serval__Auth__SigningKey: ${SERVAL_SIGNING_KEY}
-```
+Keep any of these you set out of version control on any machine that is not your own. Compose
+reads a sibling `.env`, which is where `compose.yaml` already looks for them.
 
 Rotating the signing key signs everyone out — existing tokens no longer verify — which is also the
-way to end every session at once if you ever need to.
+way to end every session at once if you ever need to: change `SERVAL_SIGNING_KEY`, or for a
+generated key delete the `jwt-signing-key` document from `server_secrets` and restart.
 
 ## TLS and exposure
 
@@ -283,11 +305,13 @@ Server also fetches each assistant's client metadata document from the internet 
 
 ## The object detector
 
-Two files, mounted alongside the other weights and pointed at by
-`Serval__Ai__Detection__ModelPath` and `__LabelsPath`. Neither ships in the image and neither is
-downloaded for you — export both with [`scripts/export-detector.sh`](../scripts/export-detector.sh)
-(or `docker compose --profile setup run --rm export-detector` from `deploy/`), and see the note in
-[`fetch-models.sh`](../scripts/fetch-models.sh). Missing either
+Two files under the models directory, pointed at by `Serval__Ai__Detection__ModelPath` and
+`__LabelsPath`. The image carries the YOLO26n export Serval is tested against, which Settings → AI
+models or the fetch-models one-shot copies into place; an export is not byte-reproducible, so that
+one copy is made once by [.github/workflows/detector-model.yml](../.github/workflows/detector-model.yml),
+published as a release, and fetched at image build against pinned checksums. For any other model,
+export both files with [`scripts/export-detector.sh`](../scripts/export-detector.sh) and see the
+note in [`fetch-models.sh`](../scripts/fetch-models.sh). Missing either
 one is a startup *warning* and a fall back to the motion gate, never a failure to start; a model
 that is present but is not the end-to-end head is fatal, because there is nothing useful to decode
 it into. Note that a labels file disagreeing with the weights is *not* caught — that head declares

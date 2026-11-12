@@ -17,6 +17,7 @@ import '../media/media_sharer.dart';
 import '../models/google_home.dart';
 import '../models/ptz.dart';
 import '../models/push.dart';
+import '../models/ai_models.dart';
 import '../models/server_settings.dart';
 import '../models/system_stats.dart';
 import '../models/vitals_history.dart';
@@ -2917,6 +2918,16 @@ class LiveServalRepository implements ServalRepository {
   @override
   Future<ServerSettings> updateSettings(Map<String, Object?> changes) =>
       _api.updateSettings(changes);
+
+  @override
+  Future<void> restartServer() => _api.restartServer();
+
+  @override
+  Future<AiModelsStatus> aiModels() => _api.aiModels();
+
+  @override
+  Future<AiModelsStatus> installAiModels(List<String> packs) =>
+      _api.installAiModels(packs);
 }
 
 /// What one pass over the feed can say about the conversations in it.

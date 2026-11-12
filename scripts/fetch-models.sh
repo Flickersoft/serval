@@ -8,8 +8,9 @@
 #   docker compose --profile setup run --rm fetch-models         # same, without a clone
 #   ./scripts/fetch-models.sh                                    # a CameraModule checkout, via its stub
 #
-# Partial installs: SKIP_VISION=1 (the 2.3 GB Qwen3-VL), SKIP_SPEAKER=1, SKIP_SOUND=1,
-# SKIP_DETECTION=1 each skip one capability's files.
+# Partial installs: SKIP_VISION=1 (the 2.3 GB Qwen3-VL), SKIP_SPEECH=1 (SenseVoice + Silero VAD,
+# a 1 GB download), SKIP_SPEAKER=1, SKIP_SOUND=1, SKIP_DETECTION=1 each skip one capability's
+# files. Settings → AI runs this same script with the flags for the models it was not asked for.
 #
 # MODEL_UID/MODEL_GID name who owns the weights afterwards. They are read only when this runs as
 # root, and only a deployment with no clone needs them — see the block below the mkdir.
@@ -70,7 +71,9 @@ fi
 SENSEVOICE="sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
 SENSEVOICE_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${SENSEVOICE}.tar.bz2"
 
-if [ ! -f "$MODEL_DIR/$SENSEVOICE/model.int8.onnx" ]; then
+if [ "${SKIP_SPEECH:-0}" = "1" ]; then
+  echo "Skipping speech model (SKIP_SPEECH=1)."
+elif [ ! -f "$MODEL_DIR/$SENSEVOICE/model.int8.onnx" ]; then
   echo "Downloading SenseVoice (ASR + emotion + audio events)..."
   curl -fL --retry 3 "$SENSEVOICE_URL" -o "/tmp/${SENSEVOICE}.tar.bz2"
   # --no-same-owner because these archives carry their packager's uid (1001:127), which tar as
@@ -80,6 +83,10 @@ if [ ! -f "$MODEL_DIR/$SENSEVOICE/model.int8.onnx" ]; then
   # cannot be set at all and tar fails rather than merely surprising anyone.
   tar --no-same-owner -xjf "/tmp/${SENSEVOICE}.tar.bz2" -C "$MODEL_DIR"
   rm -f "/tmp/${SENSEVOICE}.tar.bz2"
+  # The archive carries an fp32 model.onnx (~940 MB) beside the int8 one. Only model.int8.onnx is
+  # ever loaded (Serval:Ai:Asr:ModelPath's default), so the fp32 copy is four fifths of this
+  # model's disk for nothing.
+  rm -f "$MODEL_DIR/$SENSEVOICE/model.onnx"
   echo "SenseVoice ready."
 else
   echo "SenseVoice already present."
@@ -90,7 +97,9 @@ fi
 # a seed rather than fetched, looked for in order: $SILERO_SEED, the repo copy relative to this
 # script, and the server image's baked-in copy (which is how the compose one-shot finds it
 # without a clone).
-if [ ! -f "$MODEL_DIR/silero_vad.onnx" ]; then
+if [ "${SKIP_SPEECH:-0}" = "1" ]; then
+  : # The VAD only serves transcription.
+elif [ ! -f "$MODEL_DIR/silero_vad.onnx" ]; then
   for seed in \
       "${SILERO_SEED:-}" \
       "$SCRIPT_DIR/../CameraModule/Serval.CameraModule/models/silero_vad.onnx" \
@@ -234,15 +243,21 @@ if [ "${SKIP_DETECTION:-0}" = "1" ]; then
   echo "Skipping detection model check (SKIP_DETECTION=1)."
 elif [ -f "$DETECT_DIR/model.onnx" ] && [ -f "$DETECT_DIR/labels.txt" ]; then
   echo "Detection model already present."
+elif [ -f "$SCRIPT_DIR/models-seed/detect/model.onnx" ] && [ -f "$SCRIPT_DIR/models-seed/detect/labels.txt" ]; then
+  # The server image's bundled export (see .github/workflows/detector-model.yml). The two files are
+  # copied together, so the labels always belong to these weights.
+  echo "Copying the bundled object detector (YOLO26n) ..."
+  mkdir -p "$DETECT_DIR"
+  cp "$SCRIPT_DIR/models-seed/detect/model.onnx" "$SCRIPT_DIR/models-seed/detect/labels.txt" "$DETECT_DIR/"
 else
   mkdir -p "$DETECT_DIR"
   echo
-  echo "Object detection model NOT fetched — export it (a two-minute step):"
+  echo "Object detection model NOT present, and this image has none bundled — export it:"
   echo "  $DETECT_DIR/model.onnx    an end-to-end YOLO ONNX export"
   echo "  $DETECT_DIR/labels.txt    one class name per line, in the model's own order"
   echo
-  echo "With Docker (no Python needed) — from the deploy/ directory:"
-  echo "  docker compose --profile setup run --rm export-detector"
+  echo "From a checkout (uses Docker, or a local ultralytics install):"
+  echo "  MODEL_DIR=<models dir> ./scripts/export-detector.sh"
   echo
   echo "Or by hand (needs ultralytics >= 8.4.0):"
   echo "  pip install ultralytics"
@@ -259,4 +274,4 @@ else
   echo
 fi
 
-echo "All models present in $MODEL_DIR"
+echo "Done: models in $MODEL_DIR"

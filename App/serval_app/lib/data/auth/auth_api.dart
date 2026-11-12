@@ -43,6 +43,26 @@ class AuthApi {
     return AuthSession.fromJson(_decode(response));
   }
 
+  /// `GET /api/auth/setup` — true while the Server has no account at all.
+  Future<bool> setupRequired() async {
+    final response = await _client
+        .get(config.resolve('/api/auth/setup'))
+        .timeout(_timeout);
+    return _decode(response)['required'] == true;
+  }
+
+  /// `POST /api/auth/setup` — creates the first Admin and answers with a session, like [login].
+  Future<AuthSession> createFirstAdmin(String username, String password) async {
+    final response = await _client
+        .post(
+          config.resolve('/api/auth/setup'),
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode({'username': username, 'password': password}),
+        )
+        .timeout(_timeout);
+    return AuthSession.fromJson(_decode(response));
+  }
+
   Future<AuthSession> refresh(String refreshToken) async {
     final response = await _client
         .post(

@@ -235,12 +235,31 @@ COPY --from=build /app ./
 # Program.cs. Same origin as /api/*, so the App needs no separate host and no CORS to reach it.
 COPY --from=app /src/App/serval_app/build/web ./wwwroot
 
-# The model fetcher, runnable as a compose one-shot so a deployment without a repo checkout can
-# populate its models volume (`docker compose --profile setup run --rm fetch-models` — see
-# deploy/docker-compose.yml). models-seed/ carries the one weight vendored in git (Silero VAD v5,
-# version-pinned) so the fetcher finds it without a checkout; everything else it downloads.
+# The model fetcher, run by Settings → AI and by the compose one-shot (`docker compose --profile
+# setup run --rm fetch-models` — see deploy/compose.yaml). models-seed/ carries what ships inside
+# the image so the fetcher copies rather than downloads it: Silero VAD v5 (vendored in git) and the
+# object detector below. Everything else it downloads.
 COPY scripts/fetch-models.sh ./fetch-models.sh
 COPY CameraModule/Serval.CameraModule/models/silero_vad.onnx ./models-seed/silero_vad.onnx
+
+# The object detector (~11 MB): YOLO26n exported once by .github/workflows/detector-model.yml and
+# published as a release, fetched here against the checksums that run printed. An export is not
+# byte-reproducible, so these hashes name the model. Empty hashes skip the step and the image
+# ships without a detector — Settings → AI then says so, and scripts/export-detector.sh is the way
+# to supply one.
+ARG DETECTOR_RELEASE=detector-yolo26n-1
+ARG DETECTOR_ONNX_SHA256=2a7826e9ebcdb0046256724dbd3c23d4d79ce0009e5bf79037cf9c93e91ab511
+ARG DETECTOR_LABELS_SHA256=bd17f1ee35d5f3c862a4894605855abbb9dda4b0621fdb0ac4c2c8c7bb7e730a
+RUN if [ -n "$DETECTOR_ONNX_SHA256" ] && [ -n "$DETECTOR_LABELS_SHA256" ]; then \
+        base="https://github.com/Flickersoft/serval/releases/download/$DETECTOR_RELEASE" \
+        && mkdir -p ./models-seed/detect \
+        && curl -fsSL --retry 3 "$base/model.onnx" -o ./models-seed/detect/model.onnx \
+        && curl -fsSL --retry 3 "$base/labels.txt" -o ./models-seed/detect/labels.txt \
+        && echo "$DETECTOR_ONNX_SHA256  ./models-seed/detect/model.onnx" | sha256sum -c - \
+        && echo "$DETECTOR_LABELS_SHA256  ./models-seed/detect/labels.txt" | sha256sum -c - ; \
+    else \
+        echo "DETECTOR_*_SHA256 unset: building without the bundled object detector."; \
+    fi
 
 # Vulkan offload is decided by which libggml.so gets loaded, and without this it is never the right
 # one. LLamaSharp picks a runtimes/linux-x64/native/ folder by CPU feature detection — avx2 on both

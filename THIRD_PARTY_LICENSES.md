@@ -55,7 +55,7 @@ phosphor_icons and the rest — are resolved from `App/serval_app/pubspec.lock`;
 licensed (MIT/BSD/Apache-2.0). **Phosphor Icons** ships an icon font under MIT, and it is what half
 the golden screenshots are drawn with.
 
-The [`deploy/`](deploy/docker-compose.yml) stack also pulls two images Serval does not build:
+The [`deploy/`](deploy/compose.yaml) stack also pulls two images Serval does not build:
 **mongo:8** (MongoDB, SSPL) and **alexxit/go2rtc:1.9.14** (MIT).
 
 ## Model weights

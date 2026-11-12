@@ -1,0 +1,118 @@
+# Serval — the whole stack in one file. In an empty directory:
+#
+#   curl -fsSLO https://github.com/Flickersoft/serval/releases/latest/download/compose.yaml
+#   docker compose up -d
+#
+# Then open http://<this-host>:8080/ — the first visit creates the admin account — and add a
+# camera under Settings → Cameras. Recording, replay, the snapshot wall and WebRTC live view all
+# work from here; AI is one switch under Settings → AI, which downloads the models it needs.
+#
+# Nothing below has to be edited, and no .env file is needed. Every ${VAR:-default} can be set in
+# a .env beside this file to override it; see the comment on each. Hardware passthrough (a GPU for
+# VAAPI/Vulkan, Coral TPUs) is the one thing a setting cannot do — see the commented lines below
+# and the tuned deployments in examples/.
+
+services:
+  server:
+    image: ${SERVAL_IMAGE:-ghcr.io/flickersoft/serval-server:latest}
+    depends_on:
+      - mongo
+      - go2rtc
+    ports:
+      - "8080:8080"
+    environment:
+      Serval__Mongo__ConnectionString: mongodb://mongo:27017
+      Serval__Mongo__Database: serval
+      Serval__Media__Root: /media
+
+      # Retention is by age only, with no size cap — this number and the disk behind /media are
+      # chosen together. Six cameras recording 4K main streams is roughly 300-400 GB a day.
+      Serval__Media__RetentionDays: ${SERVAL_RETENTION_DAYS:-7}
+
+      Serval__WebRtc__Enabled: "true"
+      Serval__WebRtc__Go2RtcUrl: http://go2rtc:1984
+
+      # Optional. Unset, the server generates a token signing key on first boot and keeps it in
+      # MongoDB. Set it (`openssl rand -base64 32`) to supply your own.
+      Serval__Auth__SigningKey: ${SERVAL_SIGNING_KEY:-}
+
+      # Optional. Unset, the first browser to open the App creates the admin account. Set
+      # SERVAL_ADMIN_PASSWORD to have it created at first boot instead — for a server that is
+      # reachable by others before you get to it. Ignored once any account exists.
+      Serval__Auth__BootstrapAdminUsername: ${SERVAL_ADMIN_USERNAME:-admin}
+      Serval__Auth__BootstrapAdminPassword: ${SERVAL_ADMIN_PASSWORD:-}
+
+      # Hardware video encode: uncomment with the `devices:` block below. Recording is
+      # stream-copy, so this is only used when a camera's record stream asks to be transcoded.
+      # Serval__Ingest__HwAccelDevice: /dev/dri/renderD128
+    volumes:
+      - video:/media
+      # Model weights, written by Settings → AI (or the fetch-models one-shot below). Empty costs
+      # nothing: a server with no models is a recorder.
+      - models:/app/models
+    # Raw frames on their way to detection: memory, not the recordings disk.
+    tmpfs:
+      - /dev/shm/serval:size=256m
+    # A GPU for VAAPI encode and/or Vulkan offload of the scene model:
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # Intel GPU utilisation on the status page needs this as well:
+    # cap_add:
+    #   - PERFMON
+    # A ceiling, not a reservation: recording uses ~2 GB, the full AI stack 8-10 GB.
+    mem_limit: ${SERVAL_MEM_LIMIT:-10g}
+    restart: unless-stopped
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  mongo:
+    image: mongo:8
+    command: ["--wiredTigerCacheSizeGB", "1"]
+    volumes:
+      - mongo-data:/data/db
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *logging
+
+  # WebRTC live view. The server registers each camera's stream at runtime and pulls a camera
+  # only while someone is watching; media flows browser <-> go2rtc on 8666, never through the
+  # server. The server tells each browser to connect at the address it opened Serval with, so a
+  # LAN needs nothing set here. SERVAL_WEBRTC_CANDIDATES adds addresses for viewers elsewhere —
+  # e.g. 203.0.113.4:8666 for a port-forwarded public IP.
+  go2rtc:
+    image: alexxit/go2rtc:1.9.14
+    command:
+      - go2rtc
+      - -config
+      - "{api: {listen: ':1984'}, webrtc: {listen: ':8666', candidates: [${SERVAL_WEBRTC_CANDIDATES:-stun:8666}]}, log: {level: info}}"
+    ports:
+      - "8666:8666/tcp"
+      - "8666:8666/udp"
+    mem_limit: 512m
+    restart: unless-stopped
+    logging: *logging
+
+  # One-shot model download for a server with no browser at hand — Settings → AI does the same.
+  #   docker compose --profile setup run --rm fetch-models
+  # SKIP_VISION=1 (and SKIP_SPEECH/SKIP_SPEAKER/SKIP_SOUND/SKIP_DETECTION) leave those models out.
+  fetch-models:
+    profiles: ["setup"]
+    image: ${SERVAL_IMAGE:-ghcr.io/flickersoft/serval-server:latest}
+    entrypoint: ["bash", "/app/fetch-models.sh"]
+    environment:
+      MODEL_DIR: /models
+      SKIP_VISION: ${SKIP_VISION:-0}
+      SKIP_SPEECH: ${SKIP_SPEECH:-0}
+      SKIP_SPEAKER: ${SKIP_SPEAKER:-0}
+      SKIP_SOUND: ${SKIP_SOUND:-0}
+      SKIP_DETECTION: ${SKIP_DETECTION:-0}
+    volumes:
+      - models:/models
+
+volumes:
+  video:
+  mongo-data:
+  models:

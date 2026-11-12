@@ -237,6 +237,34 @@ class AuthController extends ChangeNotifier {
     String username,
     String password, {
     bool remember = true,
+  }) => _signIn(() => _api.login(username, password), remember: remember);
+
+  /// Whether the Server has no account yet, so the login screen should offer to create the first
+  /// Admin instead. False when the Server cannot be asked — the ordinary sign-in form is the
+  /// right thing to show a Server that is down, and the next visit asks again.
+  Future<bool> setupRequired() async {
+    try {
+      return await _api.setupRequired();
+    } on Object catch (error) {
+      debugPrint('AuthController: setup status unavailable ($error).');
+      return false;
+    }
+  }
+
+  /// Creates the Server's first Admin account and signs in as it — the setup page's one action.
+  /// Fails with the Server's own words when an account already exists or the password is too short.
+  Future<bool> createFirstAdmin(
+    String username,
+    String password, {
+    bool remember = true,
+  }) => _signIn(
+    () => _api.createFirstAdmin(username, password),
+    remember: remember,
+  );
+
+  Future<bool> _signIn(
+    Future<AuthSession> Function() request, {
+    required bool remember,
   }) async {
     // A password being typed settles the question the boot refresh was still retrying.
     _restoreRetry?.cancel();
@@ -249,7 +277,7 @@ class AuthController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final session = await _api.login(username, password);
+      final session = await request();
       _session = session;
       _remember = remember;
       if (remember) await _persist(session);

@@ -2,7 +2,7 @@
 # SCALE (25.10 Goldeye): paste into Apps -> Discover -> Custom App -> "Install via YAML".
 #
 # This is a deployment's starting point, not a record of any particular one — a box that has been
-# running for a while will have diverged, and should have. ../docker-compose.yml is the generic
+# running for a while will have diverged, and should have. ../compose.yaml is the generic
 # quickstart; the differences between the two are deliberate and all follow from the host:
 #
 #   * No `build:`. TrueNAS Apps only runs pre-built images, so the server image comes from GHCR
@@ -20,8 +20,8 @@
 # BEFORE PASTING, edit:
 #   1. Every /mnt/pool/ path -> your pool name.
 #   2. Serval__ApiKey -> a real secret.
-#   3. The webrtc candidates in the go2rtc command below -> this box's LAN IP.
-#   4. Serval__Auth__SigningKey and Serval__Auth__BootstrapAdminPassword -> real secrets.
+#   3. The webrtc candidates in the go2rtc command below -> this box's LAN IP (optional: the
+#      server also offers the address you opened it at).
 #
 # And put the models on the pool with fetch-models.sh (see Docs/deployment.md). It fetches
 # everything except the object detection weights — see Serval__Ai__Detection__Enabled below for
@@ -48,18 +48,8 @@ services:
       # something real before pointing a module here, and match it in the module's Output:ApiKey.
       Serval__ApiKey: "CHANGE-ME"
 
-      # Signing key for user login (access + stream) tokens. Unlike Serval__ApiKey, there is no
-      # safe empty value here — every endpoint except telemetry ingest now requires a logged-in
-      # user, so the server refuses to start without this set. It also refuses to start while this
-      # still reads CHANGE-ME. Generate one with `openssl rand -base64 32`.
-      Serval__Auth__SigningKey: "CHANGE-ME"
-
-      # First-run only: creates this Admin account if (and only if) the Users collection is
-      # still empty. Ignored on every later restart whether or not you leave these set — change
-      # the password from the app's user management screen (or PUT /api/auth/users/{username})
-      # once logged in, not here.
-      Serval__Auth__BootstrapAdminUsername: "admin"
-      Serval__Auth__BootstrapAdminPassword: "CHANGE-ME"
+      # No signing key or admin password here: the server generates its own signing key and keeps
+      # it in MongoDB, and the first browser to open the App creates the admin account.
 
       # --- Video encode: AMD VAAPI on the iGPU ---------------------------------------------
       # Nothing is transcoded unless a camera's record stream asks for it, so this setting sits

@@ -12,6 +12,7 @@ import '../models/google_home.dart';
 import '../models/ptz.dart';
 import '../models/push.dart';
 import '../models/saved_clip.dart';
+import '../models/ai_models.dart';
 import '../models/server_settings.dart';
 import '../models/system_stats.dart';
 import '../models/timeline.dart';
@@ -625,6 +626,31 @@ class ServalApi {
   Future<VitalsHistory> vitalsHistory() async => VitalsHistory.fromJson(
     await _getJson('/api/system/stats/history') as Map<String, dynamic>,
   );
+
+  /// The AI model packs and any download in progress — `GET /api/ai/models`, Admin-only.
+  Future<AiModelsStatus> aiModels() async => AiModelsStatus.fromJson(
+    await _getJson('/api/ai/models') as Map<String, dynamic>,
+  );
+
+  /// Starts downloading [packs] and switching them on. Answers at once; the download runs on the
+  /// Server and [aiModels] reports it.
+  Future<AiModelsStatus> installAiModels(List<String> packs) async {
+    final response = await _client.post(
+      config.resolve('/api/ai/models/install'),
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({'packs': packs}),
+    );
+    return AiModelsStatus.fromJson(_decode(response) as Map<String, dynamic>);
+  }
+
+  /// Asks the Server to restart — `202` means it accepted and is about to stop; its container's
+  /// restart policy starts it again.
+  Future<void> restartServer() async {
+    final response = await _client.post(config.resolve('/api/system/restart'));
+    if (response.statusCode != 202) {
+      throw ServalApiException(response.statusCode, _errorMessage(response));
+    }
+  }
 
   /// Make, model and firmware, as the camera reports them — ONVIF `GetDeviceInformation`.
   Future<DeviceInformation> deviceInformation(String cameraId) async {

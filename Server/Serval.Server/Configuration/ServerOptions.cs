@@ -371,6 +371,14 @@ public sealed class WebRtcOptions
 
     /// <summary>Base URL of the go2rtc sidecar's API, e.g. <c>http://go2rtc:1984</c>. The browser never uses this URL.</summary>
     public string Go2RtcUrl { get; set; } = "http://go2rtc:1984";
+
+    /// <summary>
+    /// The host port go2rtc's WebRTC media is published on. Each answer gains a candidate at the
+    /// address the browser used to reach this server, on this port — which is what makes live view
+    /// connect on a LAN with no candidate configured, since go2rtc inside Docker cannot see the
+    /// host's address. 0 turns that off and leaves the answer exactly as go2rtc wrote it.
+    /// </summary>
+    public int CandidatePort { get; set; } = 8666;
 }
 
 /// <summary>

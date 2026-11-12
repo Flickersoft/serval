@@ -17,6 +17,11 @@ import '../widgets/source_link.dart';
 /// Design 3a: two fields and one button, and nothing that leaks the state of the house — no
 /// camera count, no places, no machine name — because a screen you haven't signed into shouldn't
 /// describe what's behind it.
+///
+/// **Also the setup page.** A Server with no account yet answers [AuthController.setupRequired]
+/// with true, and the same form then creates the first Admin instead of signing in — a third
+/// field to confirm the password, and the account it creates is signed straight in. Here rather
+/// than on a route of its own because every signed-out address already lands on this screen.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.auth});
 
@@ -29,22 +34,74 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _username = TextEditingController();
   final _password = TextEditingController();
+  final _confirm = TextEditingController();
   bool _remember = true;
+
+  /// True once the Server has said it has no account yet. Starts false, so a slow or absent answer
+  /// leaves the ordinary sign-in form in place.
+  bool _setup = false;
+
+  /// The Server's minimum, checked here only to say so before the round trip.
+  static const _minPasswordLength = 8;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_checkSetup());
+  }
+
+  Future<void> _checkSetup() async {
+    final required = await widget.auth.setupRequired();
+    if (!mounted || !required) return;
+    setState(() {
+      _setup = true;
+      if (_username.text.isEmpty) _username.text = 'admin';
+    });
+  }
 
   @override
   void dispose() {
     _username.dispose();
     _password.dispose();
+    _confirm.dispose();
     super.dispose();
   }
 
+  /// What stops the setup form being submitted, in words — null when it can be.
+  String? get _setupProblem {
+    if (_password.text.isEmpty) return null;
+    if (_password.text.length < _minPasswordLength) {
+      return 'At least $_minPasswordLength characters.';
+    }
+    if (_confirm.text.isNotEmpty && _confirm.text != _password.text) {
+      return "The passwords don't match.";
+    }
+    return null;
+  }
+
+  bool get _canSubmit {
+    if (_username.text.trim().isEmpty || _password.text.isEmpty) return false;
+    if (!_setup) return true;
+    return _setupProblem == null && _confirm.text == _password.text;
+  }
+
   Future<void> _submit() async {
-    if (_username.text.isEmpty || _password.text.isEmpty) return;
-    await widget.auth.login(
-      _username.text.trim(),
-      _password.text,
-      remember: _remember,
-    );
+    if (!_canSubmit) return;
+    final ok = _setup
+        ? await widget.auth.createFirstAdmin(
+            _username.text.trim(),
+            _password.text,
+            remember: _remember,
+          )
+        : await widget.auth.login(
+            _username.text.trim(),
+            _password.text,
+            remember: _remember,
+          );
+    // Someone else finished setup first: the Server said so, and this is now a sign-in form.
+    if (!ok && _setup && mounted && !await widget.auth.setupRequired()) {
+      setState(() => _setup = false);
+    }
   }
 
   @override
@@ -105,9 +162,9 @@ class _LoginScreenState extends State<LoginScreen> {
               ],
             ),
             const SizedBox(height: 18),
-            const Text(
-              'Sign in',
-              style: TextStyle(
+            Text(
+              _setup ? 'Create the admin account' : 'Sign in',
+              style: const TextStyle(
                 fontFamily: Nocturne.fontHeading,
                 fontSize: 27,
                 fontWeight: Nocturne.headingWeight,
@@ -115,12 +172,29 @@ class _LoginScreenState extends State<LoginScreen> {
                 letterSpacing: -0.015 * 27,
               ),
             ),
+            if (_setup) ...[
+              const SizedBox(height: 10),
+              Text(
+                'This server has no accounts yet. The one you create here is its '
+                'admin, and adds everyone else from Settings.',
+                style: TextStyle(
+                  fontFamily: Nocturne.fontBody,
+                  fontSize: 13,
+                  height: 1.5,
+                  color: Nocturne.mix(Nocturne.text, 68),
+                ),
+              ),
+            ],
             const SizedBox(height: 34),
             if (widget.auth.error != null) ...[
               _ErrorBanner(message: widget.auth.error!),
               const SizedBox(height: Nocturne.space4),
             ],
+            // Keyed because setup mode inserts rows above them: without keys each field would be
+            // matched to its neighbour's state by position, and the password's show/hide toggle
+            // would land on the wrong field.
             NocturneField(
+              key: const ValueKey('username'),
               label: 'Username',
               controller: _username,
               leadingIcon: PhosphorIconsRegular.user,
@@ -129,6 +203,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             const SizedBox(height: 16),
             NocturneField(
+              key: const ValueKey('password'),
               label: 'Password',
               controller: _password,
               leadingIcon: PhosphorIconsRegular.lockSimple,
@@ -136,6 +211,29 @@ class _LoginScreenState extends State<LoginScreen> {
               enabled: widget.auth.status != AuthStatus.authenticating,
               onChanged: (_) => setState(() {}),
             ),
+            if (_setup) ...[
+              const SizedBox(height: 16),
+              NocturneField(
+                key: const ValueKey('confirm'),
+                label: 'Confirm password',
+                controller: _confirm,
+                leadingIcon: PhosphorIconsRegular.lockSimple,
+                obscure: true,
+                enabled: widget.auth.status != AuthStatus.authenticating,
+                onChanged: (_) => setState(() {}),
+              ),
+              if (_setupProblem case final problem?) ...[
+                const SizedBox(height: 8),
+                Text(
+                  problem,
+                  style: const TextStyle(
+                    fontFamily: Nocturne.fontBody,
+                    fontSize: 12.5,
+                    color: Serval.recordingText,
+                  ),
+                ),
+              ],
+            ],
             const SizedBox(height: 16),
             _RememberMeCheckbox(
               value: _remember,
@@ -145,17 +243,22 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             const SizedBox(height: 16),
             NocturneButton(
-              label: widget.auth.status == AuthStatus.authenticating
-                  ? 'Signing in…'
-                  : 'Sign in',
+              label: switch ((
+                _setup,
+                widget.auth.status == AuthStatus.authenticating,
+              )) {
+                (true, true) => 'Creating…',
+                (true, false) => 'Create account',
+                (false, true) => 'Signing in…',
+                (false, false) => 'Sign in',
+              },
               trailingIcon: PhosphorIconsRegular.arrowRight,
               variant: NocturneButtonVariant.primary,
               height: 46,
               fontSize: 14.5,
               onPressed:
                   widget.auth.status == AuthStatus.authenticating ||
-                      _username.text.isEmpty ||
-                      _password.text.isEmpty
+                      !_canSubmit
                   ? null
                   : () => unawaited(_submit()),
             ),
@@ -163,8 +266,11 @@ class _LoginScreenState extends State<LoginScreen> {
             const _Hairline(),
             const SizedBox(height: 34),
             Text(
-              "Forgotten your password? An admin can set a new one for you — "
-              "there's no email reset.",
+              _setup
+                  ? 'Anyone who can reach this page can create this account until '
+                        'someone does, so finish it now.'
+                  : "Forgotten your password? An admin can set a new one for you — "
+                        "there's no email reset.",
               style: TextStyle(
                 fontFamily: Nocturne.fontBody,
                 fontSize: 12.5,

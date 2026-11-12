@@ -13,6 +13,7 @@ import '../models/google_home.dart';
 import '../models/ptz.dart';
 import '../models/push.dart';
 import '../models/saved_clip.dart';
+import '../models/ai_models.dart';
 import '../models/server_settings.dart';
 import '../models/system_stats.dart';
 import '../models/user_preferences.dart';
@@ -823,6 +824,17 @@ abstract interface class ServalRepository {
   /// Returns the catalogue as it now stands, so the screen never has to work out for itself what a
   /// change did to the reset values or to the restart banner.
   Future<ServerSettings> updateSettings(Map<String, Object?> changes);
+
+  /// Restart the Server, which is what applies the settings marked as needing one. Returns once
+  /// the Server has accepted; the Server is then briefly unreachable while its container restarts.
+  Future<void> restartServer();
+
+  /// The AI model packs this Server can download, and any download in progress. Admin-only.
+  Future<AiModelsStatus> aiModels();
+
+  /// Starts downloading [packs] (and what they need); they are switched on once the files are in
+  /// place and load at the next restart. Returns at once — [aiModels] reports progress.
+  Future<AiModelsStatus> installAiModels(List<String> packs);
 }
 
 /// One slice of what a repository holds, as a [Listenable] of its own.

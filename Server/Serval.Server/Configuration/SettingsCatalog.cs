@@ -349,6 +349,13 @@ public static class SettingsCatalog
             + "uses this address — video flows directly from go2rtc to the browser.",
             SettingKind.Text, RestartRequired: true, Advanced: true),
 
+        new("Serval:WebRtc:CandidatePort", GroupLive, "Live video port",
+            "The port go2rtc's live video is published on, on this server's host. Live view tells "
+            + "your browser to send video there at the same address you opened Serval with, so it "
+            + "connects on your network with nothing else configured. Change it only if you "
+            + "published go2rtc on a different port; 0 stops adding that address.",
+            SettingKind.Int, Min: 0, Max: 65535, Advanced: true),
+
         // ---- PTZ ------------------------------------------------------------------------------
         new("Serval:Ptz:MoveTimeoutSeconds", GroupPtz, "Auto-stop a move after",
             "Every move command tells the camera to stop on its own after this long if nothing else "

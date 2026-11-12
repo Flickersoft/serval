@@ -103,6 +103,14 @@ public sealed class MongoContext
         _database.GetCollection<VapidKeyDocument>("push_keys");
 
     /// <summary>
+    /// Values the server generated for itself: the token signing key when none is configured, and
+    /// the first-admin claim the setup page takes. See <see cref="Auth.SigningKeyStore"/> for why
+    /// none of it is in the configuration backup.
+    /// </summary>
+    public IMongoCollection<ServerSecretDocument> ServerSecrets =>
+        _database.GetCollection<ServerSecretDocument>(ServerSecretDocument.CollectionName);
+
+    /// <summary>
     /// Authorization codes issued to Google during account linking. Short-lived and single-use;
     /// see <see cref="GoogleHome.GoogleAuthorizationCode"/> for why consuming one is an update
     /// rather than a read.

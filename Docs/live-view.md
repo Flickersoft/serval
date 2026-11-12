@@ -25,11 +25,16 @@ How it fits together:
   the SDP answer. The actual media (SRTP) then flows **directly** browser ↔ go2rtc — never through
   the server. Proxying signaling gives a single origin and one place to add auth; go2rtc is never
   exposed to clients.
-- **Networking:** the browser needs to reach go2rtc's media port (`8666`). On a LAN (the typical
-  NVR case) this just works once go2rtc advertises the host's address as an ICE candidate — set
-  `webrtc.candidates` in [go2rtc.yaml](../Server/go2rtc.yaml) to the host's LAN IP (or `stun` to
-  auto-discover). **Reaching it from outside the LAN needs a STUN+TURN server** (go2rtc supports an
-  external TURN); that's not set up here.
+- **Networking:** the browser needs to reach go2rtc's media port (`8666`). go2rtc in a Docker
+  bridge network only knows its container address, and drops it from its answers, so on its own it
+  offers only what STUN finds — the public address, which a LAN client often cannot hairpin
+  through. The server fills the gap: to every answer it proxies it adds a host candidate at **the
+  address the browser used to reach the server**, on `Serval:WebRtc:CandidatePort` (8666; 0 turns
+  it off). That address is by construction one the browser can reach this host at, so a LAN needs
+  nothing configured (`SdpCandidates`). `SERVAL_WEBRTC_CANDIDATES` — go2rtc's own
+  `webrtc.candidates` — adds addresses on top, for a port-forwarded public IP. **Reaching it from
+  outside the LAN in general needs a STUN+TURN server** (go2rtc supports an external TURN); that's
+  not set up here.
 - **It follows the `live` role, and nothing else.** A camera with no `record` role keeps nothing and
   still has a full WebRTC view — go2rtc pulls the camera itself and never reads the archive, so
   live view and recording are independent choices. The reverse also holds: a camera whose `live`

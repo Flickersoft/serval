@@ -66,6 +66,17 @@ public static class WebRtcEndpoints
             try
             {
                 string answer = await go2rtc.ExchangeSdpAsync(id, offer, ct);
+
+                // The address in the browser's address bar, on go2rtc's media port — what lets live
+                // view connect on a LAN with no candidates configured. See SdpCandidates.
+                int candidatePort = options.CurrentValue.WebRtc.CandidatePort;
+                if (candidatePort > 0)
+                {
+                    IReadOnlyList<System.Net.IPAddress> addresses =
+                        await SdpCandidates.ResolveAsync(request.Host.Host, ct);
+                    answer = SdpCandidates.AddHostCandidates(answer, addresses, candidatePort);
+                }
+
                 return Results.Text(answer, SdpContentType);
             }
             catch (HttpRequestException)

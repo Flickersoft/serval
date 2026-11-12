@@ -62,7 +62,8 @@ switches that decide whether a model is loaded at all (`ServerAi`, `Ai.Vision`, 
 `Detection.InputPixels`, and `WebRtc.Go2RtcUrl`.
 
 **Environment-only**, and staying that way: `Mongo.*`, `Media.Root`, `Ingest.FfmpegPath` /
-`FfprobePath` / `HwAccelDevice` / `Encoder`, `Auth.SigningKey`, `Auth.BootstrapAdmin*`, `ApiKey`,
+`FfprobePath` / `HwAccelDevice` / `Encoder`, `Auth.SigningKey` (generated and kept in MongoDB when
+unset), `Auth.BootstrapAdmin*` (optional — the setup page creates the first admin), `ApiKey`,
 `Cors.AllowedOrigins`, `OpenApi.Enabled`, and the whole of `GoogleHome.*`. Each is either
 load-bearing for the Server's ability to start, or a thing that changing through a UI could lock the
 operator out of that UI.

@@ -51,6 +51,28 @@ public static class SystemEndpoints
         // thing an attacker wants — it turns "is this vulnerable" into a lookup — and the people
         // with a real need for it are already signed in: the App has its own copy stamped in at
         // build time, so this route exists for a person with a terminal, not for the UI.
+        // Stops the process and relies on the container's restart policy to start it again — which
+        // is every compose file this repo ships (`restart: unless-stopped`). Exists because the
+        // settings a restart applies are set in the App, so applying them belongs there too rather
+        // than on a terminal. Without a restart policy it is a stop, and the description says so.
+        group.MapPost("/restart", (IHostApplicationLifetime lifetime, ILoggerFactory loggers, HttpContext context) =>
+            {
+                loggers.CreateLogger("Serval.Server.Vitals.Restart").LogWarning(
+                    "Restart requested from the App by '{User}'; stopping so the container restarts.",
+                    context.User.Identity?.Name ?? "unknown");
+
+                // After the response has gone, so the App hears that the restart was accepted
+                // rather than a dropped connection it cannot tell from a crash.
+                _ = Task.Delay(TimeSpan.FromSeconds(1)).ContinueWith(
+                    _ => lifetime.StopApplication(), TaskScheduler.Default);
+                return Results.Accepted();
+            })
+            .WithSummary("Restart the server to apply settings that only take effect at startup.")
+            .WithDescription(
+                "Stops the process; a container restart policy starts it again. Run without one, "
+                + "this stops the server and it stays stopped.")
+            .RequireAuthorization("Admin");
+
         group.MapGet("/version", () => Results.Ok(ServerVersion.Current))
             .WithSummary("The release and commit this server was built from.")
             .WithDescription(

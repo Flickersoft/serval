@@ -11,7 +11,8 @@ namespace Serval.Server.Auth;
 /// depend on (see <see cref="StreamTicketService"/> and <see cref="TokenService"/> for why those
 /// exist), Admin-only account management, and the two things any account may do to itself: change
 /// its own password and end its own sessions. There is no self-registration — accounts are created
-/// either by the startup bootstrap (see <c>Program.cs</c>) or by an existing Admin here.
+/// by the startup bootstrap (see <c>Program.cs</c>), by the one-time setup page while no account
+/// exists (see <see cref="FirstAdminSetup"/>), or by an existing Admin here.
 ///
 /// Ending a session means revoking a refresh token, which is stored, and not the access token,
 /// which is not. So "signed out everywhere" takes effect within the access token's lifetime rather
@@ -28,6 +29,8 @@ public static class AuthEndpoints
             .AllowAnonymous()
             .RequireRateLimiting("login")
             .WithSummary("Exchange a username and password for an access token and a refresh token.");
+
+        group.MapFirstAdminSetup();
 
         group.MapPost("/refresh", RefreshAsync)
             .AllowAnonymous()
@@ -160,7 +163,7 @@ public static class AuthEndpoints
         return Results.NoContent();
     }
 
-    private static async Task<TokenResponse> IssueTokensAsync(
+    internal static async Task<TokenResponse> IssueTokensAsync(
         User user,
         Guid familyId,
         RefreshTokenRepository refreshTokens,

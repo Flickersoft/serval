@@ -92,8 +92,8 @@ reaches it over your own network, not through your proxy.
 3. **Create a project** at the [Google Home Developer Console](https://console.home.google.com) and
    note its **project id** — the identifier, not the display name.
 
-4. **Configure it.** In the `.env` file beside your `docker-compose.yml`, alongside the values
-   already there:
+4. **Configure it.** Copy [deploy/examples/compose.google-home.yaml](../deploy/examples/compose.google-home.yaml)
+   beside `compose.yaml`, and in a `.env` there set:
 
    ```
    SERVAL_GOOGLE_ENABLED=true
@@ -105,10 +105,10 @@ reaches it over your own network, not through your proxy.
 
 5. **Recreate the container — restarting it is not enough.** A restart reuses the container that
    already exists, and its environment was fixed when it was created, so new values in `.env` are
-   simply not read. From the directory holding your `docker-compose.yml`:
+   simply not read. From the directory holding `compose.yaml`, naming the override every time:
 
    ```
-   docker compose up -d server
+   docker compose -f compose.yaml -f compose.google-home.yaml up -d server
    ```
 
    **This replaces the container even though the image has not changed.** Compose compares the
@@ -166,16 +166,15 @@ reaches it over your own network, not through your proxy.
    project → *Service accounts* → create one with the role **Service Account OpenID Connect
    Identity Token Creator** → *Add key* → *Create new key* → **JSON**.
 
-   Put the downloaded file in a `secrets` directory beside your `docker-compose.yml`, uncomment
-   the `./secrets` volume line in that file, and add to `.env`:
+   Put the downloaded file in a `secrets` directory beside `compose.yaml` — the override already
+   mounts it read-only — and add to `.env`:
 
    ```
    SERVAL_GOOGLE_HOMEGRAPH_KEY=/app/secrets/homegraph.json
    ```
 
-   Then `docker compose up -d server` again — same reason as step 5, and this one also adds a
-   volume, which a restart cannot do at all. The card's *Camera changes* line is what confirms the
-   key loaded.
+   Then step 5's command again, for the same reason. The card's *Camera changes* line is what
+   confirms the key loaded.
 
    **This is the only file Google gives you, and it is a live credential** — treat it the way you
    treat a password, and keep it out of anywhere it might be shared or backed up in the open. See
@@ -267,7 +266,7 @@ It costs a **one-time $5 Google Cast developer fee** and about ten minutes:
    ```
 
    ```
-   docker compose up -d server
+   docker compose -f compose.yaml -f compose.google-home.yaml up -d server
    ```
 
 *Settings → Server status → Google Home* then reads **On a television: live, through this server's
@@ -313,8 +312,9 @@ In roughly the order things actually go wrong:
 - **The Assistant says "showing the front door" and the display just spins.** Almost always
   `SERVAL_WEBRTC_CANDIDATES` in `.env`. Left unset, Serval advertises an address the display cannot
   reach; set it to the LAN address of the machine Serval runs on, e.g.
-  `SERVAL_WEBRTC_CANDIDATES=192.168.1.20:8666`. Live view in a browser needs the same setting, so
-  if that already works on your network, look further down this list.
+  `SERVAL_WEBRTC_CANDIDATES=192.168.1.20:8666`. Live view in a browser does **not** prove this is
+  fine: the App's own signalling adds the address the browser opened Serval at, but Google's
+  arrives from Google's cloud through your public address, which is no use to a display on the LAN.
 - **Still spinning, and live view works.** The display is not on the same network as Serval — a
   guest VLAN, an SSID that isolates clients, or a display somewhere else entirely.
 - **Linking fails in the Google Home app.** The client id or the project id does not match between

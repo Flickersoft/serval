@@ -39,14 +39,10 @@ services:
       Serval__Mongo__Database: serval
       Serval__Media__Root: /media
 
-      # HOST-SPECIFIC: secrets. `openssl rand -base64 32` for the signing key. The server refuses to
-      # start while either auth value still reads CHANGE-ME.
+      # HOST-SPECIFIC: the telemetry secret an edge CameraModule posts with. The server refuses to
+      # start while it still reads CHANGE-ME. No signing key or admin password here: the server
+      # generates its own key, and the first browser to open the App creates the admin.
       Serval__ApiKey: "CHANGE-ME"
-      Serval__Auth__SigningKey: "CHANGE-ME"
-      # First run only, and only while the Users collection is empty — ignored on every later restart
-      # whether or not it is still set. Change the password from the app once logged in.
-      Serval__Auth__BootstrapAdminUsername: "admin"
-      Serval__Auth__BootstrapAdminPassword: "CHANGE-ME"
 
       # HOST-SPECIFIC: sized to the storage disk. Retention is by age only with no size cap, and six
       # cameras recording main streams is roughly 300-400 GB a day — so this number and the disk behind
