@@ -176,6 +176,13 @@ public sealed class ClipMedia
         return frames;
     }
 
+    /// <summary>
+    /// One JPEG at <paramref name="offset"/> seconds into a finished file, held to
+    /// <c>SnapshotMaxMegapixels</c>, or null. Best-effort, like every frame read here.
+    /// </summary>
+    public Task<byte[]?> ReadFrameAsync(string path, double offset, CancellationToken cancellationToken) =>
+        TryReadFrameAsync(path, offset, cancellationToken);
+
     private async Task<byte[]?> TryReadFrameAsync(
         string clipPath, double offset, CancellationToken cancellationToken)
     {

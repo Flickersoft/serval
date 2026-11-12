@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using Serval.Server.Configuration;
+using Serval.Server.Mcp;
 using Serval.Server.Preferences;
 
 namespace Serval.Server.Auth;
@@ -217,6 +218,7 @@ public static class AuthEndpoints
         HttpContext context,
         UserRepository users,
         RefreshTokenRepository refreshTokens,
+        McpOAuthStore assistants,
         CancellationToken ct)
     {
         string userId = TokenService.RequireUserId(context.User);
@@ -235,16 +237,23 @@ public static class AuthEndpoints
             return Results.NotFound();
         }
 
+        // Everywhere includes linked assistants: a password changed because it leaked should not
+        // leave an assistant the leaker linked still reading the cameras.
         if (request.SignOutAllSessions)
         {
             await refreshTokens.RevokeAllForUserAsync(userId, ct);
+            await assistants.RevokeAllForUserAsync(userId, ct);
         }
 
         return Results.NoContent();
     }
 
     private static async Task<IResult> SignOutUserAsync(
-        string username, UserRepository users, RefreshTokenRepository refreshTokens, CancellationToken ct)
+        string username,
+        UserRepository users,
+        RefreshTokenRepository refreshTokens,
+        McpOAuthStore assistants,
+        CancellationToken ct)
     {
         if (await users.GetAsync(username, ct) is not { } user)
         {
@@ -252,6 +261,7 @@ public static class AuthEndpoints
         }
 
         await refreshTokens.RevokeAllForUserAsync(user.Id, ct);
+        await assistants.RevokeAllForUserAsync(user.Id, ct);
         return Results.NoContent();
     }
 
@@ -271,6 +281,7 @@ public static class AuthEndpoints
         UpdateUserRequest request,
         UserRepository users,
         RefreshTokenRepository refreshTokens,
+        McpOAuthStore assistants,
         CancellationToken ct)
     {
         if (request.Password is { } password && !await users.SetPasswordAsync(username, password, ct))
@@ -294,13 +305,18 @@ public static class AuthEndpoints
         if (request.SignOutAllSessions)
         {
             await refreshTokens.RevokeAllForUserAsync(user.Id, ct);
+            await assistants.RevokeAllForUserAsync(user.Id, ct);
         }
 
         return Results.Ok(ToResponse(user));
     }
 
     private static async Task<IResult> DeleteUserAsync(
-        string username, UserRepository users, UserPreferencesRepository preferences, CancellationToken ct)
+        string username,
+        UserRepository users,
+        UserPreferencesRepository preferences,
+        McpOAuthStore assistants,
+        CancellationToken ct)
     {
         if (!await users.DeleteAsync(username, ct))
         {
@@ -310,8 +326,12 @@ public static class AuthEndpoints
         // After the account is gone, and only then: a username can be created again, and
         // inheriting the previous holder's wall would be somebody else's arrangement appearing
         // on a brand new account. Not awaited before the delete because a preferences failure
-        // must not leave the account itself standing.
-        await preferences.DeleteAsync(UserRepository.Normalize(username), ct);
+        // must not leave the account itself standing. The same goes for linked assistants, whose
+        // tokens already stopped working with the account but whose grants would otherwise be
+        // listed on the new holder's Account screen.
+        string id = UserRepository.Normalize(username);
+        await preferences.DeleteAsync(id, ct);
+        await assistants.RevokeAllForUserAsync(id, ct);
         return Results.NoContent();
     }
 

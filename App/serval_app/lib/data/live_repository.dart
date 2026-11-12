@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/activity.dart';
 import '../models/alert.dart';
+import '../models/assistants.dart';
 import '../models/camera.dart';
 import '../models/cast_target.dart';
 import '../models/clip_selection.dart';
@@ -2193,6 +2194,23 @@ class LiveServalRepository implements ServalRepository {
   @override
   Future<void> unlinkGoogleHome(String agentUserId) =>
       _api.unlinkGoogleHome(agentUserId);
+
+  @override
+  Future<AssistantStatus> assistantStatus() => _api.assistantStatus();
+
+  @override
+  Future<AssistantRequest> assistantRequest(String id) =>
+      _api.assistantRequest(id);
+
+  @override
+  Future<String> answerAssistantRequest(String id, {required bool approve}) =>
+      _api.answerAssistantRequest(id, approve: approve);
+
+  @override
+  Future<List<AssistantLink>> assistantLinks() => _api.assistantLinks();
+
+  @override
+  Future<void> unlinkAssistant(String id) => _api.unlinkAssistant(id);
 
   @override
   Future<PushConfig> pushConfig() => _api.pushConfig();

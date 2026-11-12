@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/alert.dart';
+import '../models/assistants.dart';
 import '../models/camera.dart';
 import '../models/cast_target.dart';
 import '../models/clip_selection.dart';
@@ -347,6 +348,53 @@ class ServalApi {
   Future<void> unlinkGoogleHome(String agentUserId) async {
     final response = await _client.delete(
       config.resolve('/api/google/links/$agentUserId'),
+    );
+    if (response.statusCode != 204) {
+      throw ServalApiException(response.statusCode, _errorMessage(response));
+    }
+  }
+
+  // ------------------------------------------------------------ ai assistants
+  //
+  // The App's half of linking an MCP client: the consent screen's request and answer, and the
+  // list of links on the Account screen. The OAuth exchange itself is between the client and the
+  // Server; the App only ever sees a request id. See Docs/mcp.md.
+
+  Future<AssistantStatus> assistantStatus() async => AssistantStatus.fromJson(
+    await _getJson('/api/mcp/status') as Map<String, dynamic>,
+  );
+
+  Future<AssistantRequest> assistantRequest(String id) async =>
+      AssistantRequest.fromJson(
+        await _getJson('/api/mcp/oauth/requests/${Uri.encodeComponent(id)}')
+            as Map<String, dynamic>,
+      );
+
+  /// Approves or denies a request and returns where to send the browser next — back to the
+  /// assistant, carrying either a code or the refusal.
+  Future<String> answerAssistantRequest(
+    String id, {
+    required bool approve,
+  }) async {
+    final response = await _client.post(
+      config.resolve(
+        '/api/mcp/oauth/requests/${Uri.encodeComponent(id)}/'
+        '${approve ? 'approve' : 'deny'}',
+      ),
+    );
+    final body = _decode(response) as Map<String, dynamic>;
+    return body['redirectUrl'] as String;
+  }
+
+  Future<List<AssistantLink>> assistantLinks() async => [
+    for (final link in await _getJson('/api/mcp/grants') as List<dynamic>)
+      AssistantLink.fromJson(link as Map<String, dynamic>),
+  ];
+
+  /// Ends a linked assistant's access immediately: its tokens are deleted, not left to expire.
+  Future<void> unlinkAssistant(String id) async {
+    final response = await _client.delete(
+      config.resolve('/api/mcp/grants/${Uri.encodeComponent(id)}'),
     );
     if (response.statusCode != 204) {
       throw ServalApiException(response.statusCode, _errorMessage(response));

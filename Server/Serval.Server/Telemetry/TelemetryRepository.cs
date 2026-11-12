@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+using MongoDB.Bson;
 using MongoDB.Driver;
 using Serval.Contracts;
 using Serval.Server.Storage;
@@ -67,9 +69,55 @@ public sealed class TelemetryRepository
     /// </summary>
     public Task<List<DetectionDocument>> QueryDetectionsAsync(
         string cameraId, DateTimeOffset from, DateTimeOffset to, int limit, CancellationToken cancellationToken = default) =>
-        NewestFirstAsync(_context.Detections,
-            d => d.CameraId == cameraId && d.Timestamp <= to && (d.EndedAt == null || d.EndedAt >= from),
-            d => d.Timestamp, limit, cancellationToken);
+        OverlappingDetectionsAsync(
+            Builders<DetectionDocument>.Filter.Eq(d => d.CameraId, cameraId), from, to, limit, cancellationToken);
+
+    /// <summary>
+    /// How far before a window an episode that has since <em>closed</em> may have started and still
+    /// be found overlapping it. Episodes still open are found however old they are — see
+    /// <see cref="OverlappingDetectionsAsync"/>.
+    /// </summary>
+    internal static readonly TimeSpan ClosedEpisodeLookback = TimeSpan.FromDays(7);
+
+    /// <summary>
+    /// Episodes overlapping [from, to], newest first, as two bounded queries rather than one open one.
+    ///
+    /// <para><b>Why two.</b> "Started before <c>to</c>, and not ended before <c>from</c>" has no lower
+    /// bound on the start, and the end is not indexed — so on a quiet window, where fewer than
+    /// <paramref name="limit"/> episodes match, Mongo walks the (CameraId, Timestamp) index back to
+    /// the first detection the camera ever made, reading each one to test its end. Split instead:
+    /// episodes that started within <see cref="ClosedEpisodeLookback"/> of the window, on the
+    /// timestamp index; and episodes that are still open and started before that, on the
+    /// (CameraId, EndedAt, Timestamp) index, where an open episode is an equality match on null. The
+    /// only thing given up is an episode that lasted over a week and has since closed.</para>
+    /// </summary>
+    private async Task<List<DetectionDocument>> OverlappingDetectionsAsync(
+        FilterDefinition<DetectionDocument> scope,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        FilterDefinitionBuilder<DetectionDocument> by = Builders<DetectionDocument>.Filter;
+        DateTimeOffset floor = from - ClosedEpisodeLookback;
+
+        FilterDefinition<DetectionDocument> recent = scope
+            & by.Gte(d => d.Timestamp, floor)
+            & by.Lte(d => d.Timestamp, to)
+            & (by.Eq(d => d.EndedAt, null) | by.Gte(d => d.EndedAt, from));
+
+        FilterDefinition<DetectionDocument> stillOpen = scope
+            & by.Eq(d => d.EndedAt, null)
+            & by.Lt(d => d.Timestamp, floor);
+
+        List<DetectionDocument> found = await _context.Detections.Find(recent)
+            .SortByDescending(d => d.Timestamp).Limit(limit).ToListAsync(cancellationToken);
+
+        found.AddRange(await _context.Detections.Find(stillOpen)
+            .SortByDescending(d => d.Timestamp).Limit(limit).ToListAsync(cancellationToken));
+
+        return [.. found.OrderByDescending(d => d.Timestamp).Take(limit)];
+    }
 
     public Task<List<SoundDocument>> QuerySoundsAsync(
         string cameraId, DateTimeOffset from, DateTimeOffset to, int limit, CancellationToken cancellationToken = default) =>
@@ -82,6 +130,103 @@ public sealed class TelemetryRepository
         NewestFirstAsync(_context.ConversationTranscripts,
             c => c.CameraId == cameraId && c.StartedAt >= from && c.StartedAt <= to,
             c => c.StartedAt, limit, cancellationToken);
+
+    // ---- Across cameras, optionally by text ------------------------------------------------------
+    //
+    // What the MCP tools ask: "everything on these cameras in this window", and the same narrowed
+    // to records whose text contains a phrase. The cameras are always named — the caller passes
+    // every camera rather than none — because an $in on CameraId is what lets each query ride the
+    // (CameraId, Timestamp) index and merge the cameras' runs in order; a filter on time alone has
+    // no index to use and would scan the collection.
+    //
+    // The text match is an escaped, case-insensitive substring regex, the rule ClipRepository's
+    // search already uses. It cannot use an index, so it is only ever applied inside a bounded
+    // window, where the index has already narrowed the scan to that window's records.
+
+    public Task<List<SceneDocument>> FindScenesAsync(
+        IReadOnlyCollection<string> cameraIds, DateTimeOffset from, DateTimeOffset to, string? text, int limit,
+        CancellationToken cancellationToken = default)
+    {
+        FilterDefinitionBuilder<SceneDocument> by = Builders<SceneDocument>.Filter;
+        FilterDefinition<SceneDocument> filter =
+            by.In(s => s.CameraId, cameraIds) & by.Gte(s => s.Timestamp, from) & by.Lte(s => s.Timestamp, to);
+
+        if (Contains(text) is { } pattern)
+        {
+            filter &= by.Regex(s => s.Description, pattern);
+        }
+
+        return _context.Scenes.Find(filter).SortByDescending(s => s.Timestamp).Limit(limit).ToListAsync(cancellationToken);
+    }
+
+    public Task<List<UtteranceDocument>> FindUtterancesAsync(
+        IReadOnlyCollection<string> cameraIds, DateTimeOffset from, DateTimeOffset to, string? text, int limit,
+        CancellationToken cancellationToken = default)
+    {
+        FilterDefinitionBuilder<UtteranceDocument> by = Builders<UtteranceDocument>.Filter;
+        FilterDefinition<UtteranceDocument> filter =
+            by.In(u => u.CameraId, cameraIds) & by.Gte(u => u.Timestamp, from) & by.Lte(u => u.Timestamp, to);
+
+        if (Contains(text) is { } pattern)
+        {
+            filter &= by.Regex(u => u.Transcript, pattern);
+        }
+
+        return _context.Utterances.Find(filter).SortByDescending(u => u.Timestamp).Limit(limit).ToListAsync(cancellationToken);
+    }
+
+    public Task<List<ConversationTranscriptDocument>> FindConversationTranscriptsAsync(
+        IReadOnlyCollection<string> cameraIds, DateTimeOffset from, DateTimeOffset to, string? text, int limit,
+        CancellationToken cancellationToken = default)
+    {
+        FilterDefinitionBuilder<ConversationTranscriptDocument> by = Builders<ConversationTranscriptDocument>.Filter;
+        FilterDefinition<ConversationTranscriptDocument> filter =
+            by.In(c => c.CameraId, cameraIds) & by.Gte(c => c.StartedAt, from) & by.Lte(c => c.StartedAt, to);
+
+        if (Contains(text) is { } pattern)
+        {
+            filter &= by.Regex(c => c.Text, pattern);
+        }
+
+        return _context.ConversationTranscripts.Find(filter)
+            .SortByDescending(c => c.StartedAt).Limit(limit).ToListAsync(cancellationToken);
+    }
+
+    /// <summary>Episodes overlapping the window, as <see cref="QueryDetectionsAsync"/> defines it.</summary>
+    public Task<List<DetectionDocument>> FindDetectionsAsync(
+        IReadOnlyCollection<string> cameraIds, DateTimeOffset from, DateTimeOffset to, string? text, int limit,
+        CancellationToken cancellationToken = default)
+    {
+        FilterDefinitionBuilder<DetectionDocument> by = Builders<DetectionDocument>.Filter;
+        FilterDefinition<DetectionDocument> scope = by.In(d => d.CameraId, cameraIds);
+
+        if (Contains(text) is { } pattern)
+        {
+            scope &= by.Regex(d => d.Label, pattern);
+        }
+
+        return OverlappingDetectionsAsync(scope, from, to, limit, cancellationToken);
+    }
+
+    public Task<List<SoundDocument>> FindSoundsAsync(
+        IReadOnlyCollection<string> cameraIds, DateTimeOffset from, DateTimeOffset to, string? text, int limit,
+        CancellationToken cancellationToken = default)
+    {
+        FilterDefinitionBuilder<SoundDocument> by = Builders<SoundDocument>.Filter;
+        FilterDefinition<SoundDocument> filter =
+            by.In(s => s.CameraId, cameraIds) & by.Gte(s => s.Timestamp, from) & by.Lte(s => s.Timestamp, to);
+
+        if (Contains(text) is { } pattern)
+        {
+            filter &= by.Regex(s => s.Label, pattern);
+        }
+
+        return _context.Sounds.Find(filter).SortByDescending(s => s.Timestamp).Limit(limit).ToListAsync(cancellationToken);
+    }
+
+    /// <summary>An escaped, case-insensitive substring pattern, or null for no text filter.</summary>
+    internal static BsonRegularExpression? Contains(string? text) =>
+        string.IsNullOrWhiteSpace(text) ? null : new BsonRegularExpression(Regex.Escape(text.Trim()), "i");
 
     private static Task<List<T>> NewestFirstAsync<T>(
         IMongoCollection<T> collection,

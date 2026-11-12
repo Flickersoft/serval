@@ -3,6 +3,7 @@ import 'package:flutter/painting.dart';
 
 import '../models/activity.dart';
 import '../models/alert.dart';
+import '../models/assistants.dart';
 import '../models/camera.dart';
 import '../models/cast_target.dart';
 import '../models/clip_selection.dart';
@@ -277,6 +278,50 @@ class SampleServalRepository implements ServalRepository {
 
   @override
   Future<void> unlinkGoogleHome(String agentUserId) async {}
+
+  /// Switched on, with one assistant linked: the sample exists to show the screens, and the
+  /// switched-off state draws nothing but a sentence. The sentence is still exercised by tests that
+  /// override this.
+  @override
+  Future<AssistantStatus> assistantStatus() async => const AssistantStatus(
+    effective: true,
+    blocker: 'none',
+    reason: null,
+    serverUrl: 'https://serval.example.com/mcp',
+  );
+
+  @override
+  Future<AssistantRequest> assistantRequest(String id) async =>
+      AssistantRequest(
+        clientName: 'Claude',
+        verifiedHost: 'claude.ai',
+        redirectTarget: 'claude.ai',
+        verified: true,
+        expiresAt: DateTime.now().add(const Duration(minutes: 10)),
+      );
+
+  @override
+  Future<String> answerAssistantRequest(
+    String id, {
+    required bool approve,
+  }) async =>
+      'https://claude.ai/api/mcp/auth_callback?'
+      '${approve ? 'code=sample' : 'error=access_denied'}';
+
+  @override
+  Future<List<AssistantLink>> assistantLinks() async => [
+    AssistantLink(
+      id: 'sample-link',
+      clientName: 'Claude',
+      verifiedHost: 'claude.ai',
+      verified: true,
+      createdAt: DateTime.now().subtract(const Duration(days: 3)),
+      lastUsedAt: DateTime.now().subtract(const Duration(hours: 2)),
+    ),
+  ];
+
+  @override
+  Future<void> unlinkAssistant(String id) async {}
 
   /// A deployment with notifications on and a key that looks like a real one. The sample never
   /// reaches a browser's push machinery — `PushClient` is the stub under `flutter test` — so this

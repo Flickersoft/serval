@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/activity.dart';
 import '../models/alert.dart';
+import '../models/assistants.dart';
 import '../models/camera.dart';
 import '../models/cast_target.dart';
 import '../models/clip_selection.dart';
@@ -436,6 +437,27 @@ abstract interface class ServalRepository {
 
   /// Unlinks, revoking every credential issued to Google.
   Future<void> unlinkGoogleHome(String agentUserId);
+
+  // --------------------------------------------------------- ai assistants
+  //
+  // MCP clients — Claude, Gemini, anything that speaks the protocol — that a person lets read
+  // this Serval. The switch and address are ordinary catalogue settings; what lives here is the
+  // consent step and each person's own list of links. See Docs/mcp.md.
+
+  /// Whether assistants can connect, and the address to give them. Readable by any role.
+  Future<AssistantStatus> assistantStatus();
+
+  /// The request the consent screen is showing. Throws a 404 once it has expired or been answered.
+  Future<AssistantRequest> assistantRequest(String id);
+
+  /// Answers a request and returns the URL to send the browser to.
+  Future<String> answerAssistantRequest(String id, {required bool approve});
+
+  /// The assistants the signed-in person has linked. A 404 means the feature is switched off.
+  Future<List<AssistantLink>> assistantLinks();
+
+  /// Ends one linked assistant's access immediately.
+  Future<void> unlinkAssistant(String id);
 
   /// The deployment's VAPID public key and whether notifications are switched on at all.
   Future<PushConfig> pushConfig();

@@ -11,6 +11,7 @@ import '../screens/camera_screen.dart';
 import '../screens/cameras_screen.dart';
 import '../screens/clip_screen.dart';
 import '../screens/clips_screen.dart';
+import '../screens/connect_assistant_screen.dart';
 import '../screens/connecting_screen.dart';
 import '../screens/login_screen.dart';
 import '../screens/mask_editor_screen.dart';
@@ -28,7 +29,9 @@ import '../widgets/settings_shell.dart';
 /// Where you can be, as addresses rather than as an enum.
 ///
 /// ```
-/// /login
+/// /login      ?from=<address>
+/// /connecting ?from=<address>
+/// /connect    ?request=<id>              ← an AI assistant asking to be let in
 /// ShellRoute  [the icon rail]
 ///   /wall
 ///   /clips        /clips/:id
@@ -78,14 +81,30 @@ GoRouter buildServalRouter({required AuthController? auth}) => GoRouter(
           NoTransitionPage(child: ConnectingScreen(auth: auth!)),
     ),
 
+    // An AI assistant asking to be let in, arriving from the Server's OAuth authorize endpoint.
+    // Outside both shells: it is one decision, and open to every role, since what it grants is
+    // read access every signed-in account already has. See [ConnectAssistantScreen].
+    GoRoute(
+      path: '/connect',
+      pageBuilder: (context, state) => NoTransitionPage(
+        child: ConnectAssistantScreen(
+          requestId: state.uri.queryParameters['request'],
+        ),
+      ),
+    ),
+
     // Outside the shell. See [ServalShell] for why the single-camera view has no rail.
     GoRoute(
       path: '/camera/:id',
       pageBuilder: (context, state) => NoTransitionPage(
         child: _CameraRoute(
           cameraId: state.pathParameters['id']!,
-          // Where the recording should open, when arriving from a row in the feed.
-          openAt: DateTime.tryParse(state.uri.queryParameters['at'] ?? ''),
+          // Where the recording should open, when arriving from a row in the feed or from a link
+          // an AI assistant handed on. Local, because the screen labels it as it stands: the App's
+          // own links carry local time already, but an assistant's carry UTC (`…Z`).
+          openAt: DateTime.tryParse(
+            state.uri.queryParameters['at'] ?? '',
+          )?.toLocal(),
         ),
       ),
     ),
@@ -290,12 +309,21 @@ String? _redirect({
         : '/connecting?from=${Uri.encodeComponent(state.uri.toString())}';
   }
 
-  if (!signedIn) return atLogin ? null : '/login';
-  if (atLogin) return '/wall';
+  // Signed out, the address is carried through the login screen the same way `/connecting` carries
+  // it through a wait — the case that needs it is an assistant's consent link, which is opened in
+  // a browser that may never have signed in and is useless if sign-in drops it. A restore that
+  // ended at `/connecting` passes on the address it was already holding rather than its own.
+  if (!signedIn) {
+    if (atLogin) return null;
+    return _loginFor(
+      atConnecting ? state.uri.queryParameters['from'] : state.uri.toString(),
+    );
+  }
+  if (atLogin) return _returnTo(state.uri.queryParameters['from']);
 
   // Back to whatever the wait interrupted. The wall for a plain launch, which is what leaving
   // `/connecting` has always meant; the alert for a launch that a notification asked for.
-  if (atConnecting) return state.uri.queryParameters['from'] ?? '/wall';
+  if (atConnecting) return _returnTo(state.uri.queryParameters['from']);
 
   // Sent to the settings index rather than the wall: the destination was a settings page, and
   // landing somewhere adjacent reads as "not this one" where the wall would read as "signed out".
@@ -304,6 +332,30 @@ String? _redirect({
   }
 
   return null;
+}
+
+/// `/login`, remembering where to go afterwards — unless that is just the default landing, where a
+/// `?from=/wall` would only clutter the address.
+String _loginFor(String? from) {
+  final target = _returnTo(from);
+  return target == '/wall'
+      ? '/login'
+      : '/login?from=${Uri.encodeComponent(target)}';
+}
+
+/// Where a `from` parameter may send somebody: an address inside the app, or the wall.
+///
+/// A path and nothing else. `//host` is a scheme-relative URL that leaves the app, and the two
+/// gate screens would only loop back to themselves.
+String _returnTo(String? from) {
+  if (from == null ||
+      !from.startsWith('/') ||
+      from.startsWith('//') ||
+      from.startsWith('/login') ||
+      from.startsWith('/connecting')) {
+    return '/wall';
+  }
+  return from;
 }
 
 /// One alert, at whichever width the link was opened at.

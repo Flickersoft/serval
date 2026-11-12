@@ -1,5 +1,6 @@
 using System.Globalization;
 using Serval.Ai;
+using Serval.Server.Mcp;
 
 namespace Serval.Server.Configuration;
 
@@ -161,6 +162,10 @@ public static class SettingsCatalog
     public const string GroupNotifications = "Notifications";
     public const string GroupHealth = "System health";
     public const string GroupSessions = "Sign-in sessions";
+    public const string GroupAssistants = "AI assistants";
+
+    /// <summary>The one text setting with a shape to check beyond "not blank" — see <see cref="Validate"/>.</summary>
+    public const string McpPublicBaseUrlKey = "Serval:Mcp:PublicBaseUrl";
 
     /// <summary>
     /// The groups in the order the App should draw them: what the cameras do, then what is made of
@@ -171,7 +176,7 @@ public static class SettingsCatalog
         GroupRecording, GroupStreams, GroupLive, GroupPtz,
         GroupAi, GroupObjects, GroupTracking, GroupMotion, GroupScene,
         GroupSpeech, GroupVoices, GroupSound,
-        GroupAlerts, GroupNotifications, GroupHealth, GroupSessions,
+        GroupAlerts, GroupNotifications, GroupHealth, GroupSessions, GroupAssistants,
     ];
 
     /// <summary>A tuning setting only the ONNX runtime reads, with what to say on a device that does
@@ -466,6 +471,34 @@ public static class SettingsCatalog
         new("Serval:Auth:RefreshTokenDays", GroupSessions, "Stay signed in for",
             "How long an unused session stays valid before the person has to sign in again.",
             SettingKind.Int, Min: 1, Max: 365, Unit: "days"),
+
+        // ---- AI assistants ---------------------------------------------------------------------
+        new("Serval:Mcp:Enabled", GroupAssistants, "Let AI assistants connect",
+            "Opens an MCP endpoint at /mcp, so an assistant such as Claude or Gemini can answer "
+            + "questions about your cameras: what happened, what was said, what the alerts were, "
+            + "and what a camera sees. Read-only — an assistant cannot change anything, move a "
+            + "camera or dismiss an alert.\n\n"
+            + "Each assistant has to be approved by somebody signed in here, and anything it looks "
+            + "at — transcripts, scene descriptions, still images — is sent to the company that "
+            + "runs it. Linked assistants are listed, and can be revoked, on the Account screen.",
+            SettingKind.Bool),
+
+        new(McpPublicBaseUrlKey, GroupAssistants, "Address assistants reach this server on",
+            "The public https address of this server, such as https://serval.example.com — no path. "
+            + "A cloud assistant connects from the internet, so this has to be reachable from "
+            + "there with a certificate a browser trusts. The default only works for an assistant "
+            + "running on this server's own machine. Changing it ends every existing link.",
+            SettingKind.Text),
+
+        new("Serval:Mcp:AccessTokenMinutes", GroupAssistants, "Assistant token lifetime",
+            "How long an assistant's token is good for before it silently renews. Revoking a link "
+            + "takes effect immediately regardless.",
+            SettingKind.Int, Min: 5, Max: 1440, Unit: "minutes", Advanced: true),
+
+        new("Serval:Mcp:RefreshTokenDays", GroupAssistants, "Forget an unused assistant after",
+            "How long a linked assistant can go unused before it has to be approved again. One "
+            + "that is used regularly never lapses.",
+            SettingKind.Int, Min: 1, Max: 365, Unit: "days", Advanced: true),
 
         // ---- Detection engine -------------------------------------------------------------------
         // Not "Run detection on this server", which it was: this switch gates the description,
@@ -1211,6 +1244,15 @@ public static class SettingsCatalog
             case SettingKind.Choice:
                 return descriptor.Choices is { } choices && !choices.Contains(value, StringComparer.OrdinalIgnoreCase)
                     ? $"{descriptor.Label} must be one of: {string.Join(", ", choices)}."
+                    : null;
+
+            // Checked against the rule the gate itself applies, so a value it would refuse is
+            // refused here, on the field being edited — not accepted, and then reported as the
+            // endpoint closing on a different screen.
+            case SettingKind.Text when descriptor.Key == McpPublicBaseUrlKey && !string.IsNullOrWhiteSpace(value):
+                return McpGate.ParsePublicBaseUrl(value) is null
+                    ? $"{descriptor.Label} must be an https address with no path, such as "
+                      + "https://serval.example.com (http only for localhost)."
                     : null;
 
             case SettingKind.Text:

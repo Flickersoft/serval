@@ -24,6 +24,7 @@ television and have a public HTTPS endpoint. Everything else below is the engine
 | [rk3588.md](rk3588.md) | Orange Pi 5 deployment and NPU vision |
 | [coral.md](coral.md) | Server deployment with Coral Edge TPUs: object detection on an accelerator, bring-up, and the failure modes |
 | [google-home.md](google-home.md) | Putting the cameras on a Nest Hub or a television: what it needs first, what leaves your network, and what to expose |
+| [mcp.md](mcp.md) | Letting an AI assistant (Claude, Gemini, any MCP client) read the cameras: what leaves your network, what to expose, linking and revoking |
 | [releasing.md](releasing.md) | The seven steps from a merged pull request to a published release, and the two rules that keep it from going wrong |
 | [testing.md](testing.md) | The test suites, running without a camera, and the module's diagnostics |
 | [browser-testing.md](browser-testing.md) | Driving the real web build in a browser: Playwright against canvaskit, and what an insecure origin withholds |

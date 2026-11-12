@@ -24,6 +24,7 @@ public sealed class ServerOptions
     public VitalsOptions Vitals { get; set; } = new();
     public PushOptions Push { get; set; } = new();
     public GoogleHomeOptions GoogleHome { get; set; } = new();
+    public McpOptions Mcp { get; set; } = new();
 
     /// <summary>
     /// The shared detection library's settings — the same option types the CameraModule binds, so
@@ -529,6 +530,44 @@ public sealed class GoogleHomeOptions
     /// nothing here prevents 2160, it simply is not the default.</para>
     /// </summary>
     public int CastMaxHeight { get; set; } = 1080;
+}
+
+/// <summary>
+/// The read-only MCP endpoint at <c>/mcp</c>, through which an AI assistant — any MCP client, not
+/// one vendor's — can look at this server's cameras, telemetry, alerts and clips once a signed-in
+/// user has approved it. Serval is its own OAuth authorization server for this; see
+/// <c>Docs/mcp.md</c>.
+///
+/// <para><b>Unlike <see cref="GoogleHomeOptions"/>, these are UI-writable.</b> Nothing here is a
+/// secret, and nothing decides where a credential is sent: redirect targets come from each client's
+/// own registration and are matched exactly. The worst an Admin can do by editing them is switch
+/// the feature off or move its address, which ends every existing link — the same reach they
+/// already have through the Account screen's revoke button.</para>
+/// </summary>
+public sealed class McpOptions
+{
+    /// <summary>Master switch, off by default. Off, every MCP and MCP OAuth route answers 404.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>
+    /// The origin assistants reach this server on, e.g. <c>https://serval.example.com</c>. It is
+    /// the OAuth issuer, and <c>{PublicBaseUrl}/mcp</c> is the resource every token is bound to, so
+    /// changing it invalidates every link. Configured rather than read from the request for the
+    /// reason <see cref="GoogleHomeOptions.PublicBaseUrl"/> gives. Must be https and a bare origin;
+    /// plain http is accepted only for a loopback host. The default is that case — the port the
+    /// container listens on — which serves an assistant running on the server's own machine and
+    /// nothing else; a cloud assistant needs the public address.
+    /// </summary>
+    public string PublicBaseUrl { get; set; } = "http://localhost:8080";
+
+    /// <summary>How long an access token issued to an assistant lasts before it must refresh.</summary>
+    public int AccessTokenMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// How long an assistant may go unused before its link lapses. Each refresh rotates the refresh
+    /// token and restarts this clock, so a link in regular use never expires.
+    /// </summary>
+    public int RefreshTokenDays { get; set; } = 30;
 }
 
 /// <summary>The generated OpenAPI document and the Scalar UI over it.</summary>

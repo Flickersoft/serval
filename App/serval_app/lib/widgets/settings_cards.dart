@@ -93,6 +93,7 @@ PhosphorIconData settingsGroupIcon(String group) => switch (group) {
   'Pan, tilt & zoom' => PhosphorIconsRegular.arrowsOutCardinal,
   'System health' => PhosphorIconsRegular.pulse,
   'Sign-in sessions' => PhosphorIconsRegular.key,
+  'AI assistants' => PhosphorIconsRegular.robot,
   'Alerts' => PhosphorIconsRegular.warning,
   'Notifications' => PhosphorIconsRegular.bellRinging,
   'Detection engine' => PhosphorIconsRegular.cpu,

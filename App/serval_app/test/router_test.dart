@@ -22,6 +22,7 @@ import 'package:serval_app/data/serval_config.dart';
 import 'package:serval_app/router/serval_router.dart';
 import 'package:serval_app/screens/camera_screen.dart';
 import 'package:serval_app/screens/cameras_screen.dart';
+import 'package:serval_app/screens/connect_assistant_screen.dart';
 import 'package:serval_app/screens/connecting_screen.dart';
 import 'package:serval_app/screens/login_screen.dart';
 import 'package:serval_app/screens/notifications_screen.dart';
@@ -92,6 +93,21 @@ void main() {
 
       final screen = tester.widget<CameraScreen>(find.byType(CameraScreen));
       expect(screen.camera.id, 'front-door');
+    });
+
+    testWidgets('?at= in UTC opens at that instant, in local time', (
+      tester,
+    ) async {
+      await pumpAt(tester, '/camera/front-door?at=2026-11-12T22:09:25Z');
+
+      final openAt = tester
+          .widget<CameraScreen>(find.byType(CameraScreen))
+          .openAt!;
+      expect(openAt.isUtc, isFalse);
+      expect(
+        openAt.isAtSameMomentAs(DateTime.utc(2026, 11, 12, 22, 9, 25)),
+        isTrue,
+      );
     });
 
     testWidgets('/settings/cameras is the registry', (tester) async {
@@ -238,43 +254,105 @@ void main() {
     });
   });
 
-  group('the role gate', () {
-    /// A signed-in controller holding [role], without a Server: the login route is mocked, which is
-    /// the same shape `auth_login_storage_test.dart` uses.
-    Future<AuthController> signedInAs(Role role) async {
-      final config = ServalConfig(
-        baseUrl: Uri.parse('http://serval.test:8080'),
-      );
-      final auth = AuthController(
+  /// A signed-in controller holding [role], without a Server: the login route is mocked, which is
+  /// the same shape `auth_login_storage_test.dart` uses.
+  Future<AuthController> signedInAs(Role role) async {
+    final config = ServalConfig(baseUrl: Uri.parse('http://serval.test:8080'));
+    final auth = AuthController(
+      config: config,
+      api: AuthApi(
         config: config,
-        api: AuthApi(
-          config: config,
-          client: MockClient(
-            (request) async => http.Response(
-              jsonEncode({
-                'accessToken': 'access-token',
-                'accessTokenExpiresAt': DateTime.now()
-                    .add(const Duration(minutes: 10))
-                    .toIso8601String(),
-                'refreshToken': 'refresh-token',
-                'refreshTokenExpiresAt': DateTime.now()
-                    .add(const Duration(days: 30))
-                    .toIso8601String(),
-                'username': role == Role.admin ? 'admin' : 'watcher',
-                'role': role.name,
-              }),
-              200,
-              headers: const {'content-type': 'application/json'},
-            ),
+        client: MockClient(
+          (request) async => http.Response(
+            jsonEncode({
+              'accessToken': 'access-token',
+              'accessTokenExpiresAt': DateTime.now()
+                  .add(const Duration(minutes: 10))
+                  .toIso8601String(),
+              'refreshToken': 'refresh-token',
+              'refreshTokenExpiresAt': DateTime.now()
+                  .add(const Duration(days: 30))
+                  .toIso8601String(),
+              'username': role == Role.admin ? 'admin' : 'watcher',
+              'role': role.name,
+            }),
+            200,
+            headers: const {'content-type': 'application/json'},
           ),
         ),
-        // Never touches the platform channel, which a widget test has no implementation for.
-        store: _NoStore(),
-      );
-      await auth.login('someone', 'password');
-      return auth;
-    }
+      ),
+      // Never touches the platform channel, which a widget test has no implementation for.
+      store: _NoStore(),
+    );
+    await auth.login('someone', 'password');
+    return auth;
+  }
 
+  group('deep links through sign-in', () {
+    // The consent link an AI assistant opens is the case this exists for: it arrives in a browser
+    // that may not be signed in, and a sign-in that dropped it would strand the assistant
+    // mid-connection with nothing on screen to explain why.
+    testWidgets('a signed-out link is carried to /login', (tester) async {
+      final auth = AuthController(
+        config: ServalConfig(baseUrl: Uri.parse('http://localhost:5211')),
+      );
+      addTearDown(auth.dispose);
+
+      await pumpAt(tester, '/connect?request=abc', auth: auth);
+
+      final uri = router.routerDelegate.currentConfiguration.uri;
+      expect(uri.path, '/login');
+      expect(uri.queryParameters['from'], '/connect?request=abc');
+      tester
+          .takeException(); // the login card's font overflow; see the test above
+    });
+
+    testWidgets('the wall needs no from', (tester) async {
+      final auth = AuthController(
+        config: ServalConfig(baseUrl: Uri.parse('http://localhost:5211')),
+      );
+      addTearDown(auth.dispose);
+
+      await pumpAt(tester, '/wall', auth: auth);
+
+      expect(
+        router.routerDelegate.currentConfiguration.uri.toString(),
+        '/login',
+      );
+      tester.takeException();
+    });
+
+    testWidgets('signing in returns to the link', (tester) async {
+      final auth = await signedInAs(Role.viewer);
+      addTearDown(auth.dispose);
+
+      await pumpAt(
+        tester,
+        '/login?from=${Uri.encodeComponent('/connect?request=abc')}',
+        auth: auth,
+      );
+
+      final uri = router.routerDelegate.currentConfiguration.uri;
+      expect(uri.path, '/connect');
+      expect(uri.queryParameters['request'], 'abc');
+      expect(find.byType(ConnectAssistantScreen), findsOneWidget);
+    });
+
+    testWidgets('a from that leaves the app is ignored', (tester) async {
+      final auth = await signedInAs(Role.viewer);
+      addTearDown(auth.dispose);
+
+      await pumpAt(
+        tester,
+        '/login?from=${Uri.encodeComponent('//evil.example/x')}',
+        auth: auth,
+      );
+
+      expect(router.routerDelegate.currentConfiguration.uri.path, '/wall');
+    });
+  });
+
+  group('the role gate', () {
     testWidgets('a Viewer asking for /settings/users lands on the index', (
       tester,
     ) async {

@@ -1,6 +1,7 @@
 using Serval.Server.Auth;
 using Serval.Server.Cameras;
 using Serval.Server.Configuration;
+using Serval.Server.Mcp;
 using Serval.Server.Preferences;
 
 namespace Serval.Server.Backup;
@@ -35,6 +36,7 @@ public sealed class ConfigRestoreService
     private readonly CameraRepository _cameras;
     private readonly UserRepository _users;
     private readonly RefreshTokenRepository _refreshTokens;
+    private readonly McpOAuthStore _assistants;
     private readonly UserPreferencesRepository _preferences;
     private readonly ILogger<ConfigRestoreService> _logger;
 
@@ -43,6 +45,7 @@ public sealed class ConfigRestoreService
         CameraRepository cameras,
         UserRepository users,
         RefreshTokenRepository refreshTokens,
+        McpOAuthStore assistants,
         UserPreferencesRepository preferences,
         ILogger<ConfigRestoreService> logger)
     {
@@ -50,6 +53,7 @@ public sealed class ConfigRestoreService
         _cameras = cameras;
         _users = users;
         _refreshTokens = refreshTokens;
+        _assistants = assistants;
         _preferences = preferences;
         _logger = logger;
     }
@@ -295,6 +299,7 @@ public sealed class ConfigRestoreService
                 // SetPasswordAsync leave this to its caller — somebody changing their own password
                 // on their own laptop — cannot arise here, because PlanUsers exempts the caller.
                 await _refreshTokens.RevokeAllForUserAsync(plan.Username, cancellationToken);
+                await _assistants.RevokeAllForUserAsync(plan.Username, cancellationToken);
                 signedOut++;
             }
         }

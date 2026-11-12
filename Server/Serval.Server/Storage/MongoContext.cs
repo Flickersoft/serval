@@ -7,6 +7,7 @@ using Serval.Server.Cameras;
 using Serval.Server.Clips;
 using Serval.Server.Configuration;
 using Serval.Server.GoogleHome;
+using Serval.Server.Mcp;
 using Serval.Server.Preferences;
 using Serval.Server.Push;
 using Serval.Server.Recordings;
@@ -128,6 +129,23 @@ public sealed class MongoContext
     public IMongoCollection<GoogleCameraSwitch> GoogleCameraSwitches =>
         _database.GetCollection<GoogleCameraSwitch>("google_camera_switches");
 
+    /// <summary>MCP clients that registered themselves. See <see cref="McpRegisteredClient"/>.</summary>
+    public IMongoCollection<McpRegisteredClient> McpClients =>
+        _database.GetCollection<McpRegisteredClient>("mcp_clients");
+
+    /// <summary>Authorization requests waiting on somebody's approval in the App. Minutes-lived.</summary>
+    public IMongoCollection<McpAuthorizationRequest> McpAuthorizationRequests =>
+        _database.GetCollection<McpAuthorizationRequest>("mcp_auth_requests");
+
+    public IMongoCollection<McpAuthorizationCode> McpAuthorizationCodes =>
+        _database.GetCollection<McpAuthorizationCode>("mcp_auth_codes");
+
+    /// <summary>Which assistants each person has approved. See <see cref="McpGrant"/>.</summary>
+    public IMongoCollection<McpGrant> McpGrants => _database.GetCollection<McpGrant>("mcp_grants");
+
+    /// <summary>Access and refresh tokens issued to assistants, stored as hashes only.</summary>
+    public IMongoCollection<McpToken> McpTokens => _database.GetCollection<McpToken>("mcp_tokens");
+
     /// <summary>
     /// Create indexes. Idempotent — Mongo ignores a CreateOne for an index that already
     /// exists, so this runs safely on every boot.
@@ -161,6 +179,14 @@ public sealed class MongoContext
             new CreateIndexModel<DetectionDocument>(
                 Builders<DetectionDocument>.IndexKeys
                     .Ascending(d => d.CameraId).Ascending(d => d.IsAlert).Descending(d => d.Timestamp)),
+            cancellationToken: cancellationToken);
+
+        // Episodes still open, however long ago they started — the half of an overlap query the
+        // timestamp index cannot bound. See TelemetryRepository.OverlappingDetectionsAsync.
+        await Detections.Indexes.CreateOneAsync(
+            new CreateIndexModel<DetectionDocument>(
+                Builders<DetectionDocument>.IndexKeys
+                    .Ascending(d => d.CameraId).Ascending(d => d.EndedAt).Descending(d => d.Timestamp)),
             cancellationToken: cancellationToken);
 
         await ConversationTranscripts.Indexes.CreateOneAsync(
@@ -284,6 +310,66 @@ public sealed class MongoContext
         await GoogleTokens.Indexes.CreateOneAsync(
             new CreateIndexModel<GoogleToken>(
                 Builders<GoogleToken>.IndexKeys.Ascending(t => t.ExpiresAt),
+                new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
+            cancellationToken: cancellationToken);
+
+        // MCP. Everything short-lived carries a TTL index on ExpiresAt, so nothing needs a sweep
+        // worker; a registration that has been granted something has no ExpiresAt and is skipped.
+        await McpClients.Indexes.CreateOneAsync(
+            new CreateIndexModel<McpRegisteredClient>(
+                Builders<McpRegisteredClient>.IndexKeys.Ascending(c => c.ExpiresAt),
+                new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
+            cancellationToken: cancellationToken);
+
+        await McpAuthorizationRequests.Indexes.CreateOneAsync(
+            new CreateIndexModel<McpAuthorizationRequest>(
+                Builders<McpAuthorizationRequest>.IndexKeys.Ascending(r => r.ExpiresAt),
+                new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
+            cancellationToken: cancellationToken);
+
+        await McpAuthorizationCodes.Indexes.CreateOneAsync(
+            new CreateIndexModel<McpAuthorizationCode>(
+                Builders<McpAuthorizationCode>.IndexKeys.Ascending(c => c.CodeHash),
+                new CreateIndexOptions { Unique = true }),
+            cancellationToken: cancellationToken);
+
+        await McpAuthorizationCodes.Indexes.CreateOneAsync(
+            new CreateIndexModel<McpAuthorizationCode>(
+                Builders<McpAuthorizationCode>.IndexKeys.Ascending(c => c.ExpiresAt),
+                new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
+            cancellationToken: cancellationToken);
+
+        // Unique, because approving is an upsert on exactly this pair and two concurrent approvals
+        // would otherwise both insert.
+        await McpGrants.Indexes.CreateOneAsync(
+            new CreateIndexModel<McpGrant>(
+                Builders<McpGrant>.IndexKeys.Ascending(g => g.UserId).Ascending(g => g.ClientId),
+                new CreateIndexOptions { Unique = true }),
+            cancellationToken: cancellationToken);
+
+        // A grant expires with its newest refresh token, so an unused link leaves the list when it
+        // stops working.
+        await McpGrants.Indexes.CreateOneAsync(
+            new CreateIndexModel<McpGrant>(
+                Builders<McpGrant>.IndexKeys.Ascending(g => g.ExpiresAt),
+                new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
+            cancellationToken: cancellationToken);
+
+        // Looked up by hash on every tool call.
+        await McpTokens.Indexes.CreateOneAsync(
+            new CreateIndexModel<McpToken>(
+                Builders<McpToken>.IndexKeys.Ascending(t => t.TokenHash),
+                new CreateIndexOptions { Unique = true }),
+            cancellationToken: cancellationToken);
+
+        await McpTokens.Indexes.CreateOneAsync(
+            new CreateIndexModel<McpToken>(
+                Builders<McpToken>.IndexKeys.Ascending(t => t.GrantId)),
+            cancellationToken: cancellationToken);
+
+        await McpTokens.Indexes.CreateOneAsync(
+            new CreateIndexModel<McpToken>(
+                Builders<McpToken>.IndexKeys.Ascending(t => t.ExpiresAt),
                 new CreateIndexOptions { ExpireAfter = TimeSpan.Zero }),
             cancellationToken: cancellationToken);
     }
