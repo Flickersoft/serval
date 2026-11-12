@@ -32,7 +32,15 @@ import 'source_link.dart';
 /// supported all three of the things on it — `PUT /api/auth/password` among them — and the App
 /// offered none of them, so the only way to change your own password was to ask an Admin to set one
 /// for you, which tells them what it is.
-enum SettingsSection { status, cameras, server, ai, notifications, account, users }
+enum SettingsSection {
+  status,
+  cameras,
+  server,
+  ai,
+  notifications,
+  account,
+  users,
+}
 
 /// Where a section lives, so the sidebar and the drill-down index send you to the same address.
 String settingsPathFor(SettingsSection section) => switch (section) {

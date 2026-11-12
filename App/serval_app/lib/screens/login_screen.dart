@@ -257,8 +257,7 @@ class _LoginScreenState extends State<LoginScreen> {
               height: 46,
               fontSize: 14.5,
               onPressed:
-                  widget.auth.status == AuthStatus.authenticating ||
-                      !_canSubmit
+                  widget.auth.status == AuthStatus.authenticating || !_canSubmit
                   ? null
                   : () => unawaited(_submit()),
             ),

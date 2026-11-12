@@ -1,11 +1,7 @@
 /// Settings → AI: the model packs the Server can download, and any download in progress — the
 /// client half of `Server/Serval.Server/Ai/ModelPacks.cs`.
 class AiModelsStatus {
-  const AiModelsStatus({
-    required this.packs,
-    this.cannotInstall,
-    this.job,
-  });
+  const AiModelsStatus({required this.packs, this.cannotInstall, this.job});
 
   factory AiModelsStatus.fromJson(Map<String, dynamic> json) => AiModelsStatus(
     packs: [
@@ -49,7 +45,8 @@ class AiModelPack {
     downloadBytes: (json['downloadBytes'] as num?)?.toInt() ?? 0,
     memory: json['memory'] as String?,
     requires: [
-      for (final id in json['requires'] as List<dynamic>? ?? const []) id as String,
+      for (final id in json['requires'] as List<dynamic>? ?? const [])
+        id as String,
     ],
     installed: json['installed'] as bool? ?? false,
     enabled: json['enabled'] as bool? ?? false,
@@ -92,7 +89,8 @@ class AiModelJob {
 
   factory AiModelJob.fromJson(Map<String, dynamic> json) => AiModelJob(
     packs: [
-      for (final id in json['packs'] as List<dynamic>? ?? const []) id as String,
+      for (final id in json['packs'] as List<dynamic>? ?? const [])
+        id as String,
     ],
     startedAt: DateTime.parse(json['startedAt'] as String),
     finishedAt: json['finishedAt'] == null
@@ -103,7 +101,8 @@ class AiModelJob {
     step: json['step'] as String?,
     bytesWritten: (json['bytesWritten'] as num?)?.toInt(),
     log: [
-      for (final line in json['log'] as List<dynamic>? ?? const []) line as String,
+      for (final line in json['log'] as List<dynamic>? ?? const [])
+        line as String,
     ],
   );
 

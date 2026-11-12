@@ -1465,13 +1465,15 @@ class SampleServalRepository implements ServalRepository {
       AiModelPack(
         id: 'sound',
         name: 'Sound events',
-        description: '527 kinds of sound — breaking glass, alarms, a barking dog.',
+        description:
+            '527 kinds of sound — breaking glass, alarms, a barking dog.',
         downloadBytes: 111034072,
       ),
       AiModelPack(
         id: 'scene',
         name: 'Scene descriptions',
-        description: 'A vision-language model writes what is happening in a scene.',
+        description:
+            'A vision-language model writes what is happening in a scene.',
         downloadBytes: 2279480352,
         memory: '~2.9 GB of memory once loaded',
       ),
