@@ -259,14 +259,14 @@ HTTP is not a secure context either. Only real TLS is — which for a LAN name m
 proxy with a certificate, or something like `tailscale serve`, which terminates TLS with a valid
 `*.ts.net` certificate without any DNS or port-forwarding of your own.
 
-Push has one further consequence worth stating: it is one of only two features that make the Server
+Push has one further consequence worth stating: it is one of only three features that make the Server
 reach the public internet on its own initiative, since a browser's push service is Google's,
 Mozilla's or Apple's. What crosses that boundary is ciphertext encrypted to the subscribing browser
 — the relay cannot read the alert text, the camera name, or the token in it. A deployment with no
 outbound internet access simply gets no notifications; nothing else is affected.
 
-The other is [Google Home](google-home.md), and it is the only thing here that needs the Server to
-be reachable *inbound* from the internet. It is off by default. Turning it on makes the two
+Another is [Google Home](google-home.md), and it needs the Server to be reachable *inbound* from
+the internet. It is off by default. Turning it on makes the two
 defaults above stop being optional — set `Serval__Cors__AllowedOrigins` and
 `Serval__OpenApi__Enabled=false` — and the recommended shape publishes only the four `/api/google/*`
 routes while everything else stays on the LAN. No video reaches Google either way — it only sets
@@ -274,6 +274,12 @@ the connection up — and on the displays it streams live to, the picture goes d
 over the LAN without touching that boundary at all. The one case that does cross it is a Cast
 device Google will not stream live to, which fetches video from the published address instead; see
 [google-home.md](google-home.md#what-leaves-your-network).
+
+[AI assistants](mcp.md) are the third, and the second to need inbound access for a cloud assistant.
+Also off by default. Unlike Google Home, they do send what the cameras captured off the network —
+transcripts, descriptions and stills, to whichever company runs the assistant — and approving one
+needs the App itself reachable at the public address, so the two defaults above apply in full. The
+Server also fetches each assistant's client metadata document from the internet when it connects.
 
 ## The object detector
 

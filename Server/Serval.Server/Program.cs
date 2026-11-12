@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using System.Threading.RateLimiting;
@@ -22,6 +23,7 @@ using Serval.Server.Events;
 using Serval.Server.GoogleHome;
 using Serval.Server.Ingest;
 using Serval.Server.Live;
+using Serval.Server.Mcp;
 using Serval.Server.Media;
 using Serval.Server.Onvif;
 using Serval.Server.Preferences;
@@ -483,6 +485,15 @@ void ConfigureJwtBearer(JwtBearerOptions options, bool requireStreamScope)
         // just was not wired up.
         OnMessageReceived = context =>
         {
+            // /mcp takes only an assistant's token (McpBearerHandler). Declining here, rather than
+            // letting validation fail, is what keeps an App session from authenticating there, and
+            // keeps every assistant call from logging a malformed-JWT failure.
+            if (context.Request.Path.StartsWithSegments(McpGate.McpPath))
+            {
+                context.NoResult();
+                return Task.CompletedTask;
+            }
+
             if (requireStreamScope)
             {
                 string? queryToken = context.Request.Query["stream_token"];
@@ -513,7 +524,13 @@ void ConfigureJwtBearer(JwtBearerOptions options, bool requireStreamScope)
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, o => ConfigureJwtBearer(o, requireStreamScope: false))
-    .AddJwtBearer(MediaPolicies.StreamTokenScheme, o => ConfigureJwtBearer(o, requireStreamScope: true));
+    .AddJwtBearer(MediaPolicies.StreamTokenScheme, o => ConfigureJwtBearer(o, requireStreamScope: true))
+    // Opaque tokens issued to AI assistants, accepted on /mcp and nowhere else. See McpBearerHandler.
+    .AddScheme<AuthenticationSchemeOptions, McpBearerHandler>(McpBearerHandler.SchemeName, configureOptions: null);
+
+// Read-only MCP endpoint for AI assistants, and Serval's own OAuth server for linking them. Off by
+// default and gated live on Serval:Mcp:Enabled. See Docs/mcp.md.
+builder.Services.AddServalMcp();
 
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("Admin", policy => policy.RequireRole(nameof(Role.Admin)))
@@ -528,6 +545,7 @@ builder.Services.AddAuthorizationBuilder()
     // in this project can reach. See MediaPolicyTests.
     .AddPolicy("MediaAccess", MediaPolicies.ConfigureMediaAccess)
     .AddPolicy("AlertImageAccess", MediaPolicies.ConfigureAlertImageAccess)
+    .AddPolicy(McpBearerHandler.PolicyName, McpBearerHandler.ConfigurePolicy)
     // Any endpoint added later without an explicit policy fails closed (401) rather than
     // accidentally shipping open.
     .SetFallbackPolicy(new AuthorizationPolicyBuilder()
@@ -721,6 +739,10 @@ app.UseStaticFiles();
 // OPTIONS itself, which routing would otherwise turn into a 405.
 app.UseCors(AppCorsPolicy);
 
+// Every MCP route 404s while the feature is off — ahead of authentication, so a closed endpoint
+// neither challenges nor advertises an authorization server.
+app.UseServalMcpGate();
+
 // Auth after CORS (a preflight OPTIONS carries no credential and must never be challenged), and
 // before everything else — WebSockets, rate limiting, and every endpoint all assume
 // HttpContext.User is already populated.
@@ -754,6 +776,7 @@ app.MapPreferencesEndpoints();
 app.MapPushEndpoints();
 app.MapGoogleHomeEndpoints();
 app.MapConfigBackupEndpoints();
+app.MapServalMcp();
 
 // The App's web build, when wwwroot holds one (see Dockerfile) — every API route lives under
 // /api, so any other unmatched GET is the SPA shell, which handles its own client-side routing

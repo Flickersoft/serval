@@ -19,6 +19,8 @@
       against it.
     -->
     <PackageReference Include="Microsoft.OpenApi" Version="2.13.0" />
+    <!-- The /mcp endpoint: Streamable HTTP transport and the RFC 9728 resource-metadata challenge. -->
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
     <PackageReference Include="MongoDB.Driver" Version="3.13.0" />
     <!-- The browsable UI. .NET 10 generates the OpenAPI document but ships no renderer for it. -->
     <PackageReference Include="Scalar.AspNetCore" Version="2.18.7" />

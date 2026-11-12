@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../data/auth/auth_models.dart';
 import '../data/providers.dart';
+import '../models/assistants.dart';
+import '../widgets/assistants_section.dart';
 import '../theme/nocturne.dart';
 import '../theme/serval_tokens.dart';
 import '../widgets/compact_app_bar.dart';
@@ -48,6 +52,68 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
   bool _saving = false;
   String? _failure;
   bool _done = false;
+
+  /// AI assistants. Read once when the page opens: a link is made in another tab, through the
+  /// consent screen, and nothing here moves on its own.
+  AssistantStatus? _assistants;
+  List<AssistantLink> _assistantLinks = const [];
+  String? _assistantError;
+  bool _unlinking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadAssistants());
+  }
+
+  Future<void> _loadAssistants() async {
+    final repository = ref.read(repositoryProvider);
+    try {
+      final status = await repository.assistantStatus();
+      // Asked for even while the feature is closed: the list stays readable then, so a link can be
+      // disconnected before somebody switches assistants back on.
+      final links = await repository.assistantLinks();
+      if (!mounted) return;
+      setState(() {
+        _assistants = status;
+        _assistantLinks = links;
+        _assistantError = null;
+      });
+    } catch (error) {
+      // Broad on purpose, for the reason server_screen gives for Google Home: a decoding error
+      // escaping an unawaited future would remove the section with nothing said anywhere.
+      if (!mounted) return;
+      setState(
+        () => _assistantError = 'Could not read linked assistants: $error',
+      );
+    }
+  }
+
+  Future<void> _unlinkAssistant(AssistantLink link) async {
+    setState(() {
+      _unlinking = true;
+      _assistantError = null;
+    });
+    try {
+      await ref.read(repositoryProvider).unlinkAssistant(link.id);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _unlinking = false;
+        _assistantError = 'Could not disconnect ${link.displayName}: $error';
+      });
+      return;
+    }
+    await _loadAssistants();
+    if (mounted) setState(() => _unlinking = false);
+  }
+
+  /// Absent, rather than present and saying "off", on a deployment that has not switched
+  /// assistants on and where this person has nothing linked — most deployments, permanently.
+  bool get _assistantsHidden =>
+      _assistantError == null &&
+      (_assistants == null ||
+          (_assistants!.switchedOff && _assistantLinks.isEmpty));
 
   @override
   void dispose() {
@@ -97,6 +163,10 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
         _fresh.clear();
         _confirm.clear();
       });
+
+      // Signing out everywhere disconnects this account's assistants too, so the list below would
+      // otherwise go on showing links that no longer work.
+      if (_signOutEverywhere) unawaited(_loadAssistants());
     } catch (error) {
       if (!mounted) return;
       setState(() {
@@ -140,6 +210,18 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
         const SettingsDivider(),
         const SizedBox(height: 20),
         _sessions(logout),
+        if (!_assistantsHidden) ...[
+          const SizedBox(height: 20),
+          const SettingsDivider(),
+          const SizedBox(height: 20),
+          AssistantsSection(
+            status: _assistants,
+            links: _assistantLinks,
+            busy: _unlinking,
+            error: _assistantError,
+            onUnlink: (link) => unawaited(_unlinkAssistant(link)),
+          ),
+        ],
       ],
     );
 

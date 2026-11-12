@@ -9,6 +9,7 @@ using Serval.Server.Cameras;
 using Serval.Server.Cast;
 using Serval.Server.GoogleHome;
 using Serval.Server.Ingest;
+using Serval.Server.Mcp;
 using Serval.Server.Media;
 using Serval.Server.Onvif;
 using Serval.Server.Preferences;
@@ -438,6 +439,54 @@ public class EndpointRoutingTests
     }
 
     /// <summary>
+    /// Which MCP routes are anonymous, and which take an App session or an assistant's token.
+    ///
+    /// <para><b>The same hazard as Google Home's, in a group an operator publishes.</b> The
+    /// anonymous routes are anonymous by protocol: a client discovering this server, registering,
+    /// starting an authorization in a browser and redeeming a code has no Serval credential yet.
+    /// The consent and grant routes are the opposite — they act as a signed-in person — and one of
+    /// them picking up <c>.AllowAnonymous()</c> would let a stranger approve their own assistant.
+    /// <c>/mcp</c> itself must take the assistant policy and nothing else.</para>
+    /// </summary>
+    [Fact]
+    public void McpRoutesAreAnonymousOnlyWhereAClientHasNoCredentialYet()
+    {
+        List<RouteEndpoint> endpoints = [.. Materialize(app => app.MapServalMcp()).OfType<RouteEndpoint>()];
+
+        Dictionary<string, string> authorization = endpoints
+            .Where(e => !(e.RoutePattern.RawText ?? "").TrimStart('/').StartsWith("mcp", StringComparison.Ordinal))
+            .ToDictionary(
+                e => $"{Verb(e)} /{e.RoutePattern.RawText?.TrimStart('/')}",
+                Authorization,
+                StringComparer.Ordinal);
+
+        Assert.Equal(
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["GET /.well-known/oauth-protected-resource"] = "(anonymous)",
+                ["GET /.well-known/oauth-protected-resource/mcp"] = "(anonymous)",
+                ["GET /.well-known/oauth-authorization-server"] = "(anonymous)",
+                ["POST /api/mcp/oauth/register"] = "(anonymous)",
+                ["GET /api/mcp/oauth/authorize"] = "(anonymous)",
+                ["POST /api/mcp/oauth/token"] = "(anonymous)",
+
+                ["GET /api/mcp/status"] = "(default)",
+                ["GET /api/mcp/oauth/requests/{id}"] = "(default)",
+                ["POST /api/mcp/oauth/requests/{id}/approve"] = "(default)",
+                ["POST /api/mcp/oauth/requests/{id}/deny"] = "(default)",
+                ["GET /api/mcp/grants"] = "(default)",
+                ["DELETE /api/mcp/grants/{id}"] = "(default)",
+            },
+            authorization);
+
+        List<RouteEndpoint> mcp = [.. endpoints.Except(endpoints.Where(e => authorization.ContainsKey(
+            $"{Verb(e)} /{e.RoutePattern.RawText?.TrimStart('/')}")))];
+
+        Assert.NotEmpty(mcp);
+        Assert.All(mcp, e => Assert.Equal(McpBearerHandler.PolicyName, Authorization(e)));
+    }
+
+    /// <summary>
     /// The specific shape that took the server down, pinned so it cannot come back: a complex type
     /// in a <c>MapDelete</c> handler is inferred as a body, and DELETE does not allow one.
     ///
@@ -496,6 +545,7 @@ public class EndpointRoutingTests
         builder.Services.AddSingleton<CameraStreamTicketService>();
         builder.Services.AddSingleton<SmartHomeFulfillment>();
         builder.Services.AddSingleton<IGo2RtcClient, Go2RtcClient>();
+        builder.Services.AddServalMcp();
 
         WebApplication app = builder.Build();
         map(app);
