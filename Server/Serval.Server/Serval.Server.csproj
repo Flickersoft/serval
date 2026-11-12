@@ -23,7 +23,7 @@
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
     <PackageReference Include="MongoDB.Driver" Version="3.13.0" />
     <!-- The browsable UI. .NET 10 generates the OpenAPI document but ships no renderer for it. -->
-    <PackageReference Include="Scalar.AspNetCore" Version="2.18.7" />
+    <PackageReference Include="Scalar.AspNetCore" Version="2.21.0" />
   </ItemGroup>
 
   <!--

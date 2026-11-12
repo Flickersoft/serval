@@ -46,6 +46,8 @@
       can go whenever that lead stops being worth a line. It must stay on the 2.1.x line the managed
       half resolves from either way — a 3.x native against a 2.1.x core is a pairing nobody ships.
     -->
+    <PackageReference Include="SkiaSharp" Version="4.156.0" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.156.0" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.14" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.14" />
