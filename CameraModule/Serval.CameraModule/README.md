@@ -1,25 +1,21 @@
 # Serval.CameraModule
 
-Listens to a microphone, detects speech, and for each utterance produces a transcript,
-a speech-emotion label, and an audio-event label. Results are delivered to the Serval Server
-over HTTP (or written as JSON to the filesystem when no server is configured).
+Optional edge worker for single-board computers with an attached microphone and USB/CSI camera. It
+captures audio via PortAudio (speech detection, transcription, emotion, audio events, and speaker
+diarization) and video frames via V4L2 (motion gating and scene description), then sends the
+resulting telemetry to `Serval.Server` over HTTP via a SQLite outbox (or writes JSONL locally when
+no server URL is configured).
 
-All inference runs **locally and in-process** via native C++ (sherpa-onnx over its C API).
-No network calls at runtime, no external model servers.
-
-The detection itself lives in [`Shared/Serval.Ai`](../../Shared/), which the Server references too —
-a camera gets the same AI whether or not it has an edge device. What stays in *this* project is
-what only an edge module has: V4L2 capture, PortAudio, and the durable SQLite outbox.
+Inference runs locally in-process using `sherpa-onnx` and `llama.cpp` (`mtmd`). The core AI
+pipelines live in [`Shared/Serval.Ai`](../../Shared/), which `Serval.Server` also uses for
+server-side AI on standard RTSP cameras; this project adds local V4L2 capture, PortAudio capture,
+and the offline SQLite outbox.
 
 Targets:
-- **Desktop (linux-x64)** — development and debugging.
-- **Orange Pi 5 / RK3588 (linux-arm64)** — deployment target.
+- **Desktop (`linux-x64`)** — development and debugging.
+- **Orange Pi 5 / RK3588 (`linux-arm64`)** — edge deployment target (supports RKNN NPU offload for vision).
 
-The same code and the same models run on both. There is no per-architecture branch in the
-audio path.
-
-The rule throughout: **a capability either runs a real model or reports nothing.** Never add a mock
-that emits plausible-looking output.
+Disabled capabilities omit their telemetry fields rather than emitting placeholder values.
 
 ## Status
 
@@ -83,9 +79,9 @@ dotnet test ../Serval.CameraModule.Tests    # the module: outbox, sink, V4L2 ABI
 dotnet test ../../Shared/Serval.Ai.Tests    # the shared library: gates, contract, conversations
 ```
 
-Both run in a couple of seconds and need **no models, fixtures, or devices** — clone and run.
-[Docs/testing.md](../../Docs/testing.md) covers what each diagnostic proves, and how to calibrate
-a camera's motion and speaker thresholds by measurement rather than guesswork.
+Both test suites run without models, media fixtures, or hardware devices.
+[Docs/testing.md](../../Docs/testing.md) describes each diagnostic flag and how to calibrate motion
+and speaker thresholds from sample clips.
 
 ## Models
 
@@ -121,18 +117,16 @@ upgrade but is a Cantonese fine-tune, and why Silero is vendored in git — are 
   size cap or rotation — on an SD card that eventually fills the device. **TODO: add a size cap.**
   Note this is telemetry *data*, not a log, so it is deliberately not covered by the journald
   setup; rotating it would drop records the Server has never seen.
-- **CVE-2025-6965** (`SQLitePCLRaw.lib.e_sqlite3`, high) is reported at build. It arrives
-  transitively through `Microsoft.Data.Sqlite`, not as a direct reference. It requires
-  attacker-controlled SQL; every query here is parameterised and internally authored, so it is not
-  reachable. **Re-check on any `Microsoft.Data.Sqlite` bump** — that is what will pull in a patched
-  native package, and this note should go with it.
+- **`SQLitePCLRaw.lib.e_sqlite3` is pinned directly (`2.1.14`).** Referenced alongside
+  `Microsoft.Data.Sqlite` to stay ahead of `GHSA-2m69-gcr7-jv3q` while remaining on the `2.1.x`
+  native ABI expected by `Microsoft.Data.Sqlite`'s `2.1.x` managed bundle.
 
 ## Roadmap
 
 **Video relay to the Server.** Today the module emits **telemetry only** — the camera's video
-never leaves the edge device. But the module does *not* transcode to Serval's unified codec, and
-its camera is local (V4L2 `/dev/video0`), so for a module camera to be **recorded** its video
-must still reach the Server's ffmpeg. The module needs to relay it over the LAN.
+never leaves the edge device. Because its camera is attached locally via V4L2 (`/dev/video0`),
+recording a module camera on `Serval.Server` requires relaying an encoded video stream over the LAN
+to the Server's ingest pipeline.
 
 Recommended shape: capture a full-quality stream alongside the low-res AI capture, hardware-encode
 it on the RK3588 in whichever codec the SoC does best, and **serve it as RTSP/RTP** on the LAN.

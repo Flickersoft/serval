@@ -4,23 +4,20 @@ The detection code lives in [`Shared/`](../Shared/) and is referenced by both th
 CameraModule, so the two produce comparable results from the same weights and the same prompts.
 
 `Shared/` splits three ways: `Serval.Ai.Core` (the pure gate logic and the seams, no native
-dependencies, unit-testable on a fresh clone), `Serval.Ai` (the sherpa-onnx and LLamaSharp
+dependencies, unit-testable on a fresh clone), `Serval.Ai` (the `sherpa-onnx` and `LLamaSharp`
 implementations), and `Serval.Contracts` (the telemetry documents, declared once for both sides).
 
-The house rule throughout: **a capability either runs a real model or reports nothing.** Never add
-a mock that emits plausible-looking output — a fake transcription is indistinguishable from a
-broken deployment.
+Disabled capabilities omit their telemetry fields rather than emitting synthetic placeholder values.
 
 ## The gates
 
-Cheap gates stand in front of the expensive models, which is what makes detection affordable across
-many cameras:
+Lightweight gates run ahead of the heavier models to bound CPU and GPU load across cameras:
 
 | Gate | Guards | How |
 |---|---|---|
 | **Objects** | the vision model (seconds of CPU per description) | A detection model on the camera's frames, reporting what is *present*. A description is asked for when something arrives or when something already in shot moves. |
 | **Motion** | the same, on hosts with no detection model | Frame differencing on a downscaled luma plane. A near-total change is *rejected* rather than reported — that is the IR-cut filter or a light switching on, not movement. |
-| **Sound level** | the VAD (an ONNX pass on every 512-sample window) | RMS threshold with pre-roll and hangover, so it opens before speech starts and closes well after it ends, and never cuts an utterance. |
+| **Sound level** | the voice activity detector (VAD — an ONNX pass on every 512-sample window) | RMS threshold with pre-roll and hangover, so it opens before speech starts and closes well after it ends, and never cuts an utterance. |
 
 **The two vision gates are alternatives, not a chain, and which one runs is per camera.**
 `Serval:Ai:Detection:Enabled` decides whether a detection model is loaded at all and is the default
@@ -118,13 +115,16 @@ and it is about recall, not speed.**
 
 So on each frame `RegionPlanner` builds a short list of places to look:
 
-1. **The floor** — the whole frame. **How often depends on whether crops are on, and this is the
-   single most consequential thing in the planner.** With crops off it is *every frame*; with them on
-   it drops to once every `Regions:FloorSeconds`, and motion and track crops carry the time in
-   between. Where `Regions:TiledFloor` is on and the camera is squeezed enough to earn it, the pass
-   becomes a native-scale sweep: run whole on every frame if it is at most `Regions:SweepAtOnce`
-   tiles, otherwise one tile per frame on the `FloorSeconds` interval. See
-   [the tiled floor](#a-region-has-a-ceiling-a-floor-and-a-magnification-limit) and `coral.md`.
+1. **The floor** — full-scene coverage so newly arrived or stationary objects are acquired even
+   when nothing moves. With region cropping off, the whole frame is examined on *every frame*; with
+   region cropping on, the whole-frame pass runs once every `Regions:FloorSeconds` while track and
+   motion crops cover the frames in between. On fixed-square accelerators (such as Coral Edge TPU)
+   where shrinking a wide frame into a square input loses too much detail, enabling
+   `Regions:TiledFloor` replaces the single downscaled whole-frame pass with overlapping native-scale
+   tiles (run all at once when the sweep needs at most `Regions:SweepAtOnce` tiles, or one tile per
+   frame across `FloorSeconds` when wider). See
+   [region bounds](#a-region-has-a-ceiling-a-floor-and-a-magnification-limit) and
+   [coral.md](coral.md#input-shape-and-what-tiling-is-for).
 2. **Tracks** — a crop around each live track's predicted position, whether or not anything moved
    there, so something already known about keeps being seen after it stops moving.
 3. **Motion** — a crop around each cluster of changed cells, at native resolution, capped by
@@ -263,9 +263,9 @@ Tested on a 1536x432 32:9 camera against a fixed 320² input:
 
 **Growing it is free, which is the whole argument.** The scale is set by whichever axis is squeezed
 hardest — 0.83x across against 2.96x down — so the slack axis can be filled at no cost in resolution
-and no extra inference. The identical 0.83x, with three and a half times more real picture in it. It
-also supplies the context the tight-crop failure in `Grow` warns about: 108 pixels of height around a
-71-pixel subject is barely any, and this is where more comes from.
+and no extra inference. That preserves the 0.83x scale while putting 3.5× more real scene context
+into the input, avoiding the tight-crop recall drop measured above (108 pixels of height around a
+71-pixel subject leaves almost no surrounding context).
 
 Only ever grown, never trimmed — shrinking an axis would cut away the subject the crop was taken for
 — and clamped to the frame, so a 432-pixel-tall frame simply gives what it has.
@@ -287,9 +287,9 @@ crop inside the bound cannot be shaped out of it. Shaping happens before any ove
 since a piece is already the bound's shape and it is the region it came from that decides coverage.
 
 **And it cannot breach the magnification limit either**, for the simpler reason that shaping only ever
-grows: a crop already at or above the limit's floor stays there. The floor is applied first, in the same
-`Fit` that grows a crop to `MinSizeFraction`, so a track crop and a motion crop of the same subject are
-bounded identically — which is the invariant `Fit` exists for.
+grows: a crop already at or above the limit's floor stays there. The floor is applied first in
+`RegionPlanner.Fit` (alongside `MinSizeFraction`), so a track crop and a motion crop of the same
+subject are bounded identically.
 
 ### A region has a ceiling, a floor, and a magnification limit
 
@@ -446,12 +446,11 @@ actually grow past the bound are affected; an ordinary crop on those cameras is 
 
 ### Presence is not an event
 
-The first version of this gate was **worse** than the motion gate it replaced: 47 descriptions
-against 7, on the same footage. Nothing was wrong with the detections. A driveway camera sees a
-parked car in 2648 of 2648 frames and a living room sees a couch in 2645 of 2645, and treating each
-of those as something to describe is louder than differencing pixels.
+Triggering a scene description on every frame that contains an object would fire continuously on
+stationary objects — a driveway camera sees a parked car in every frame all day, and a living-room
+camera sees a couch in every frame, producing more descriptions than simple pixel differencing.
 
-Three rules separate an event from the furniture, and they are the whole design:
+Three rules separate an actionable event from static scenery:
 
 - **Arrival** — an object is news only when it has been *observably absent* for
   `Detection:NoveltySeconds`. Asked of the object rather than its class, so a second car pulling onto
@@ -850,12 +849,11 @@ A camera is watched when something it asked for has a model to run on — descri
 vision model, objects with the detector — so a host with the small detector and no 2.3 GB vision
 model still detects, and a camera that only wants prose is not quietly charged for inference.
 
-> **Upgrading.** Detection used to be gated by `AiVision` along with descriptions. It is now
-> inherited, so on a server with `Serval:Ai:Detection:Enabled` on, cameras that had descriptions
-> switched off will **start detecting** — a share of the inference budget, detection records, and
-> object alerts on cameras that have never produced one. That is what "follow the Server" means and
-> there is no migration; the App shows *Look for objects — using the default* on exactly those
-> cameras. To keep the old behaviour, switch *Look for objects* off on them after upgrading.
+> **Note on per-camera defaults.** `DetectionTuning.Enabled` defaults to following
+> `Serval:Ai:Detection:Enabled` independently of `AiVision`. Enabling `Serval:Ai:Detection:Enabled`
+> therefore activates object detection (and object alerts) on every camera whose *Look for objects*
+> setting is left at *using the default*, even on cameras where `AiVision` scene descriptions are
+> turned off. Switch *Look for objects* off per camera to exclude specific views.
 
 The two halves have deliberately different shapes, because their inputs do:
 
@@ -930,21 +928,21 @@ Fetch them with [`scripts/fetch-models.sh`](../scripts/fetch-models.sh).
 `SKIP_VISION=1` skips the 2.3 GB vision download; `SKIP_SPEAKER=1` skips the speaker models;
 `SKIP_DETECTION=1` skips the detector.
 
-**The detector is not bundled and no default weights are downloaded for you.** The decoder reads the
-**end-to-end detection head** — output `[1, detections, 6]`, one row per detection carrying
-`x1, y1, x2, y2, score, class` with the box already corner-based in model pixels — so which model to
-run is a deployment decision rather than one this repository makes. The Ultralytics exports are
-AGPL-3.0, which is a licence some deployments cannot take.
-
-**Developed and tested against Ultralytics YOLO26n, stock COCO-80**, which is the one known-good
-answer if you want one:
+**Pre-built Server container images bundle a pre-exported Ultralytics YOLO26n ONNX model**, which
+*Settings → AI models* or the `fetch-models` compose service copies into `/app/models/detect/` (see
+[deployment.md](deployment.md#enabling-the-ai)). A bare git checkout does **not** include
+`model.onnx` in the repository and `scripts/fetch-models.sh` does not download one over the network
+when run outside the container image. For local source builds — or to use a different model size or
+licence (Ultralytics weights are AGPL-3.0) — export an **end-to-end detection head** (`[1, N, 6]`
+output tensor of `[x1, y1, x2, y2, score, class]` in corner pixel coordinates) using
+[`scripts/export-detector.sh`](../scripts/export-detector.sh) or `yolo export` directly:
 
 ```bash
-yolo export model=yolo26n.pt format=onnx simplify=True imgsz=384,640
+yolo export model=yolo26n.pt format=onnx simplify=True dynamic=True imgsz=384,640
 ```
 
-That gives `[1, 300, 6]`; `labels.txt` is the 80 COCO names, one per line, in the model's own order.
-Needs ultralytics 8.4.0 or newer, which is where the YOLO26 weights landed.
+That emits `[1, 300, 6]`; `labels.txt` lists the 80 COCO class names, one per line, in model index
+order (requires `ultralytics >= 8.4.0`).
 
 ### Coral / EdgeTPU — built, and measured
 
@@ -992,11 +990,10 @@ but because no working end-to-end YOLO export for the EdgeTPU compiler exists. W
 scale on wide cameras, and `Regions:TiledFloor` is the answer to it; the trade is in
 [coral.md](coral.md#input-shape-and-what-tiling-is-for).
 
-**Two cheaper levers remain unexplored and still cheap**, and both reuse the `onnx` backend: an
-**int8 model exploiting the N100's AVX-VNNI**, which the 5700G cannot show because it has no VNNI
-at all, and **OpenVINO on the iGPU**, already wired into `BuildSessionOptions`.
-The second is worth less than it looks on this particular host, though, because the vision model already
-owns those 24 EUs.
+**Two additional CPU/iGPU options use the `onnx` backend:** an **int8 ONNX model using the N100's
+AVX-VNNI instructions** (not measurable on an AMD Ryzen 5700G, which lacks VNNI), and **OpenVINO on
+the Intel iGPU** (`onnx-openvino`, wired in `BuildSessionOptions`, though on an N100 host running
+vision offload the 24 execution units are already busy with the VLM).
 
 ### Export with dynamic axes and let each camera pick its own shape
 
@@ -1128,38 +1125,25 @@ The speaker download also fetches **fixtures with known speaker counts**
 
 ## Tuning the models
 
-**`Speaker.ClusterThreshold` decides whether diarization is useful.** It cannot be reasoned about,
-only measured: sherpa-onnx's own diarization example sidesteps it by hardcoding a known speaker
-count, which we never have. Measured against the bundled English known-count fixtures:
+**`Speaker.ClusterThreshold` controls offline speaker clustering.** `sherpa-onnx` agglomerative
+clustering uses cosine distance across a **0 to 2** range (`--speakers` sweeps `0.40..1.40`;
+values above `1.0` are valid cosine distances). Unlike `sherpa-onnx`'s SDK example, which hardcodes
+a known speaker count, Serval must infer the count from this distance threshold.
 
-| Threshold | 1-two-speakers (2) | 2-two-speakers (2) |
+Measured against the bundled two-speaker English reference clips (`models/speaker/fixtures/`):
+
+| Threshold | `1-two-speakers` (2) | `2-two-speakers` (2) |
 |---|---|---|
-| 0.50 (sherpa default) | 2 ✓ | **3 ✗** |
-| 0.60 | 2 ✓ | **3 ✗** |
-| **0.675 (ours)** | **2 ✓** | **2 ✓** |
+| 0.50 (`sherpa-onnx` default) | 2 ✓ | **3 ✗** (over-splits) |
+| 0.60 | 2 ✓ | **3 ✗** (over-splits) |
+| **0.675 (Serval default)** | **2 ✓** | **2 ✓** |
 | 0.80 | 2 ✓ | 2 ✓ |
+| 0.90 | — | **1 ✗** (collapses to 1 speaker) |
 
-That is how 0.675 was chosen. **It does not hold up** — read the next section before trusting it.
-`--speakers` re-measures, and its sweep now reaches the range where a real room actually sits.
-
-### The threshold is a cosine distance, and the sweep above could not reach half its range
-
-`Clustering.Threshold` runs **0 to 2**, not 0 to 1 — it is a cosine distance, so values above 1 are
-meaningful. Every measurement in the table above was taken from a sweep that stopped at 0.8,
-including the one that chose 0.675, and the count was still falling steeply where it ended. A sweep
-that cannot express the right answer still prints a confident table, which is the worst way for an
-instrument to fail.
-
-The sweep now reaches 1.4. What that exposes is that the two reference clips do not agree with each
-other about where the value belongs once you can see the whole curve — `1-two` and
-`2-two` are both correct across 0.675-0.80, but 0.90 already collapses `2-two` to a single speaker.
-The usable band is narrower than it looked, and it sits at the bottom of a range we had never
-measured the top of.
-
-**Re-measure your own rooms.** `--speakers` is the instrument, the fixtures only calibrated it, and
-a threshold chosen from two studio recordings of two well-separated speakers is not evidence about a
-room with four people and a hard ceiling. The default stays at 0.675 because nothing measured here
-justifies moving it, not because it is known to be right anywhere but on these clips.
+The usable band across those studio clips (`0.675–0.80`) is narrow, and room acoustics, reverberation,
+and microphone distance shift embeddings substantially. **Calibrate per room** by running
+[`Serval.CameraModule.Tools --speakers`](testing.md#calibrating-a-camera) on multi-speaker audio
+captured from the target camera rather than relying on the studio-fixture default alone.
 
 **`Capture.Width`/`Height` is the biggest vision performance lever.** Image resolution dominates
 inference cost far more than threads do. Measured on a 7950X3D at 4 threads:

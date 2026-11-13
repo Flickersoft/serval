@@ -264,109 +264,82 @@ What *counts* as an alert is elsewhere, and unchanged: `Detection:AlertClasses`,
 
 ## The screens
 
-Design round 14. `/alerts` is a peer of the wall and of saved clips, third on the rail with a
-boolean dot rather than a count — at 64px a number is unreadable, and the question the rail answers
-is whether there is anything. On a phone there is no rail, so the wall's app bar carries the bell
-and the dot.
+`/alerts` sits in the left navigation rail alongside the camera wall and saved clips, showing an
+unread dot rather than a numeric badge (on narrow mobile screens without a rail, the bell icon and
+dot appear in the wall's top app bar).
 
-`AlertsScreen` is 14a wide and 14b on a phone: rows rather than the cards saved clips use, grouped
-by day, with the heading saying `Yesterday · seen` when a whole day has been read. Seen rows drop
-back but stay — clearing the list is a decision rather than something time does. `AlertScreen` is
-one alert, and where a tapped notification lands: one destination however you arrive.
+`AlertsScreen` renders rows grouped by day (`Yesterday · seen` once every alert in a day has been
+opened). Seen rows dim visually in place until explicitly dismissed. `AlertScreen` (`/alerts/:id`)
+displays a single alert and serves as the landing page when a user taps a push notification.
 
-**Round 14 drew a still; the card plays a clip.** The design predates the preview buffer, and 14d
-was drawn as a dead end — a still, and a card explaining that the still was all there was. It is
-not, any more. A camera that was not recording gets an ordinary card whose preview plays like every
-other; the only difference left is that there is no recording to go on to, so *Watch it on <camera>*
-is absent and a dashed `Not recorded` chip says why. There is still no export on this screen, which
-*is* from the design and stands: a clip is made in the recording, and this screen's job is to put
-you there.
+Every alert card plays its preview clip directly, even on cameras with `Recording` turned off (using
+the rolling `PreviewRing` buffer). When a camera was not recording, *Watch it on <camera>* is
+omitted and a `Not recorded` badge explains that there is no timeline archive beyond the preview.
+Clip export is done from the camera timeline rather than from the alert card.
 
-The box is drawn **over** the poster rather than burned into it. `DetectionBox` is normalised, so
-one picture serves the 132×74 row thumbnail, the phone's 112×64, and a full-width hero, with the box
-a hairline at every size.
+The detection bounding box is drawn **over** the poster at render time rather than burned into the
+JPEG. Because `DetectionBox` uses normalised `0..1` coordinates, the same image serves list
+thumbnails (`132×74` desktop, `112×64` mobile) and the full-width detail view with a crisp 1px
+stroke at every size.
 
-### The poster arrives before the clip
+### Provisional posters before the clip finishes
 
-An alert is raised the moment the detector fires and its clip is cut sixteen seconds later, so for
-that whole window there was nothing to draw — the card fell back to the camera's stripe with a
-detection box floating on it, which is what a tapped notification looked like every single time.
+An alert is raised as soon as the detector fires, while its preview clip is cut
+`AlertPostRollSeconds + 1s` (~16 seconds) later. Without a provisional image, opening an alert or
+tapping a push notification during that window would show only the UI's diagonal-stripe placeholder
+background behind a floating bounding box.
 
-So the poster no longer waits for the clip. `AlertService.RaiseAsync` reads
-`SnapshotBroadcaster.Latest` — already encoded, already in memory — and hands it to
-`AlertClipWorker.EnqueuePoster`, which writes it to the alert's poster path. `AlertClipWorker` then
-overwrites it with the exact detection frame when the clip settles — **unless the two clocks
-disagree**. `posterAt` is `peak_at` minus the clip's first segment start, and those come from
-different anchors; `PreviewRing` re-anchoring off the wall clock after a segment gap makes the
-subtraction negative, which `ClipMedia` used to clamp to zero. That silently made the poster frame
-zero of the clip — `AlertPreRollSeconds` *before* the detection — on the one route whose whole
-promise is "the frame it fired on". An offset outside the clip now logs and keeps the stand-in
-instead: an approximate frame from the right moment beats an exact frame from the wrong one.
+To avoid that gap, `AlertService.RaiseAsync` immediately writes `SnapshotBroadcaster.Latest` (already
+JPEG-encoded in memory) to the alert's poster path via `AlertClipWorker.EnqueuePoster`. Once the
+preview clip finishes encoding, `AlertClipWorker` overwrites that provisional poster with the exact
+`peak_at` frame extracted from the clip — **unless the segment clock offset falls outside the clip**.
+`posterAt` is computed as `peak_at` minus the clip's first segment start; if `PreviewRing`
+re-anchored after a stream gap and made that offset negative, clamping to `0` would extract a frame
+`AlertPreRollSeconds` *before* the detection. When the offset falls outside the clip, the worker logs
+the mismatch and keeps the provisional snapshot instead.
 
-Four more consequences worth knowing:
+Four details follow from this lifecycle:
 
-- **`poster.jpg` is gated on the file, not on `clip_state`.** Gating on `Ready` would 404 the
-  stand-in for the whole window it exists to cover. It also means an `Unavailable` alert — one there
-  was never any footage to cut — now has a picture, where before it had the stripe forever.
-- **The clip states did not change.** `pending` simply comes to mean *poster yes, clip no*, which is
-  what the *Clip in a moment* pill already said.
-- **The poster URL carries the clip state**, and it has to. `Image.network` caches by URL, so
-  without something that moves when the file does, the approximate picture is the only one the App
-  would ever show — and nothing would look wrong, which is what would make it hard to find.
-- **`recorded` is null for that window, not false.** It is settled with the clip, because at the
-  raise the segment covering the alert has not closed or been indexed. Published as `false` it made
-  every alert on a recording camera wear the `Not recorded` chip for its first sixteen seconds and
-  then quietly take it back, so a screen watched live disagreed with itself minute to minute. Both
-  the App and anything else reading the queue have to ask `== false` for the chip and `== true` for
-  *Watch it on <camera>*; null is neither, and the card says nothing about the recording.
+- **`poster.jpg` is gated on file existence, not on `clip_state == Ready`.** Serving the file as
+  soon as it exists covers the `pending` window and also gives `unavailable` alerts (e.g., when a
+  camera has no `PreviewRing`, the ring rolled past, or a restart interrupted cutting) a still image.
+- **`pending` means poster available, clip still cutting**, matching the UI's *Clip in a moment*
+  badge.
+- **The App's poster request URL includes `clip_state` as a cache-buster**, so `Image.network`
+  fetches the exact `peak_at` frame once `clip_state` transitions from `pending` to `ready`.
+- **`recorded` is `null` while `pending`, not `false`.** Whether the alert's timestamp is covered by
+  permanent recordings is resolved when the clip settles (after the active recording segment has
+  closed and been indexed). Clients check `recorded == false` before showing `Not recorded` and
+  `recorded == true` before showing *Watch it on <camera>*.
 
-The cost is that a snapshot is published at `Ingest:SnapshotFps` — once a second — while `box` is
-measured against the exact frame. So the box can sit slightly off a fast-moving subject until the
-clip settles. The exact fix is to encode the `DetectFrame` the detector actually ran on, which is in
-memory at the raise; it is not done because that is a JPEG encode next to the detection loop, and
-that loop is the one thing nothing may slow down.
+Because snapshots run at `Ingest:SnapshotFps` (~1 fps) while `box` comes from the exact detection
+frame (`Ingest:DetectFps`), the provisional poster can trail a fast-moving subject by up to ~1 second
+until the clip settles. Encoding the raw `DetectFrame` synchronously during `RaiseAsync` is avoided
+so JPEG compression never slows down the detection loop; `AlertService` logs `peak_at - CapturedAt`
+at `Debug` level on every raise to make that delta observable.
 
-How far off it actually is now gets logged rather than argued about: `AlertService` records
-`peak_at` minus the snapshot's `CapturedAt` at debug on every raise. Both stamps come from one
-session anchor — `FfmpegSnapshotSession` hands the same one to `SnapshotWatcher` and
-`DetectFrameReader` — so the number is a real gap and not two clocks disagreeing. About a second is
-expected, since snapshots are published at `Ingest:SnapshotFps` while detection runs at
-`Detection:DetectFps`. Consistently more than that is worth chasing before anything else here, and
-the cheap answer would be for `SnapshotBroadcaster` to keep a couple of recent frames per camera so
-the raise can pick the one nearest `peak_at` instead of the newest.
+### Live updates on open alert screens
 
-### The screen a notification lands on updates itself
-
-A tap arrives about a second after the raise, so `AlertScreen` opens on an alert whose clip is still
-being cut. It subscribes to `ServalRepository.alertUpdates` for its own id, which carries the
-republish `AlertClipWorker` makes when the clip settles; the poster is re-fetched at the new state
-and the player goes live. `AlertsScreen` does the same for a row already listed. Without it the
-screen held whatever it had at first paint until you navigated away and came back.
+Because a tapped notification typically opens `AlertScreen` while the clip is still `pending`, both
+`AlertScreen` and `AlertsScreen` subscribe to `ServalRepository.alertUpdates` (fed by `WS /api/events`).
+When `AlertClipWorker` republishes the settled alert, the poster refreshes and the video player
+activates in place without requiring navigation.
 
 ## Push notifications
 
-The design's premise was that every row was already a push, and it now is. One notification per
-alert row, carrying `title` verbatim — which is why that field is composed once on the server and
-frozen: a notification and the queue entry it belongs to cannot disagree about what happened.
+Each raised alert enqueues one Web Push notification carrying the server-composed `title` verbatim,
+ensuring the push banner and `/alerts` queue always match.
 
-**The send hangs off the raise, not the event bus.** `AlertService.RaiseAsync` calls
-`AlertNotifier.Enqueue` *inside* the branch the duplicate-key check guards, so the once-a-frame
-object path costs nothing and each alert notifies exactly once. Subscribing to `EventBroadcaster`
-instead would see every alert twice — once on raise, again when the clip settles. Enqueue takes a
-slot in a bounded channel and returns; the caller is the detection loop and nothing may make it
-wait.
+**Notifications are enqueued from `AlertService.RaiseAsync`, not from `EventBroadcaster`.** Calling
+`AlertNotifier.Enqueue` inside the duplicate-key guard ensures each episode triggers at most one
+push notification (whereas `EventBroadcaster` sees every alert twice: on raise and on clip settle)
+and returns immediately via a bounded channel without blocking detection.
 
-**The picture is the alert's own poster.** It was the camera's live snapshot for a while, on the
-grounds that `poster.jpg` is cut from footage that does not exist yet and 404s until the clip
-settles. That stopped being true the moment the provisional poster landed — see *The poster arrives
-before the clip* above — and the difference is not cosmetic.
-
-`snapshot.jpg` serves whatever the camera is showing **when the browser fetches it**, and a browser
-fetches a notification's image when the notification is drawn rather than when it was composed. So
-every second of delivery lag moved the picture further from the thing being reported, usually onto
-an empty scene — a notification about nothing, which is exactly what it looks like. A poster is
-fixed to its alert: a late delivery is still the right picture, and one drawn after the clip settles
-is the exact frame the detection fired on.
+**Notifications attach the alert's `poster.jpg`, not live `snapshot.jpg`.** Because browsers fetch a
+notification's image when rendering the banner rather than when the event occurred, pointing at live
+`snapshot.jpg` would show an empty scene whenever delivery lagged by a few seconds. Pointing at
+`poster.jpg` serves the provisional snapshot immediately and the exact `peak_at` detection frame for
+any notification rendered after the clip settles.
 
 Browsers fetch that image with no `Authorization` header available to them, so the URL carries a
 `?stream_token=`; it rides inside the encrypted payload and the push service relaying it sees
@@ -413,9 +386,9 @@ trap is written up at length on `CameraStreamTicketService`, which escaped it by
 that was not available here, because an in-memory ticket dies on restart and a notification outlives
 one. What is given up is revocation, and the `alert` claim is the whole bound on that.
 
-**What the tap lands on is covered above** — see *The poster arrives before the clip* and *The screen
-a notification lands on updates itself*. Between them, a tapped notification opens on a real picture
-and fills in the clip without a navigation.
+**Tap behavior is covered above** — see *Provisional posters before the clip finishes* and *Live
+updates on open alert screens*. A tapped notification opens on the provisional poster and transitions
+to the settled clip in place.
 
 **Four links decide who is told.** The deployment's `Serval:Ai:Detection:AlertClasses`, then the
 camera's own override — those two run in the detection loop and decide whether a row exists at all
@@ -454,46 +427,25 @@ plain-HTTP deployment the notifications screen explains itself and offers nothin
 
 ### The notifications screen
 
-Design round 15 — 15b wide, 15c on a phone. `/settings/notifications` is the one settings page that
-belongs to the person rather than the deployment: any role reaches it, nothing on it is
-administrative, and two people signed into the same house see different answers. *What I'm alerted
-on* in the alert queue's header is the way in.
+`/settings/notifications` is a per-user preferences screen rather than an Admin-only deployment
+page: any signed-in role can access it, and rules apply to that user's own account. *What I'm
+alerted on* in the `/alerts` header links directly to it.
 
-It asks two questions and draws nothing else. **May this browser notify me** is one card whose
-headline is whichever of five things is true — no push machinery, refused, switched off
-deployment-wide, not registered, or allowed — because the cause is different in each and only the
-last two are fixable from the page. Under it sits a chip per browser the account has registered,
-each carrying when it was last reached; one that never has is drawn in the alert hue, since a device
-that has never been notified is the visible symptom of most ways this goes wrong.
+The screen has two sections:
 
-**What am I told about** is a card per camera, wrapping three across on a desktop and one on a
-phone, holding only that camera's effective alert classes and sound labels. Its subtitle counts both
-together — `7 of 7 on` — and a camera switched off says `Muted` instead. Writes land immediately;
-there is no save bar, because every control here is one fact.
-
-Two things the design drew are deliberately absent: a zone label on each card and a zone filter
-beside the search. Serval has no notion of a zone or a group — a camera has a name and nothing
-else — and a filter over a field that does not exist is a control that cannot work.
+- **May this browser notify me** — reports the current browser's Web Push state (unsupported/HTTP
+  origin, browser permission denied, disabled server-wide, unregistered, or registered) and lists
+  every browser device registered to this account with its last-notified timestamp.
+- **What am I told about** — one card per camera (three columns on desktop, single column on mobile)
+  listing that camera's effective alert object classes and sound labels, with an immediate per-label
+  toggle and per-camera mute/cooldown controls.
 
 ## Not built
 
-**A second notification when the clip settles.** The push fires on the raise, and the exact
-detection frame and the playable clip arrive some seconds later; no second push goes out to say so.
-Re-notifying on the same `tag` would replace the notification silently, but it doubles the volume
-for a picture almost nobody is still looking at.
-
-Less of a gap than it was. The image URL is the alert's poster rather than a live snapshot, so the
-picture *behind* it sharpens on its own when the clip settles — a notification the browser draws
-late gets the exact frame with no second push. What a delivered-and-drawn notification will not do
-is go back and re-fetch it.
-
-The wire is ready for it. The payload carries a `quiet` flag and `sw.js` reads it into `renotify`
-and `silent`, so a republish can update the card without interrupting anybody. Nothing sets it yet;
-it shipped with the cooldown because a service worker updates on its own schedule, and a browser
-running last month's `sw.js` would be loud for the first release that started setting it.
-
-Only the notification is missing, though — see *The screen a notification lands on* above. The
-alert itself is republished on `/api/events` when the clip settles, and the screens act on it.
-
-**Quiet hours, and per-device rules.** The rules are per account: somebody with a phone and a laptop
-gets the same alerts on both. Muting is all-or-nothing per person, via the master switch.
+- **Updating a push banner after the clip settles.** Push fires once on raise. While `sw.js`
+  supports a `quiet` payload flag mapped to `renotify`/`silent`, the server does not currently send a
+  second silent push when `AlertClipWorker` finishes extracting the exact `peak_at` poster (only the
+  in-app `/api/events` stream receives the settled update).
+- **Quiet hours and per-device filtering.** Notification rules and mute state are stored per user
+  account rather than per browser subscription, so a user signed in on both a phone and a laptop
+  receives the same alerts on both.

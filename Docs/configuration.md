@@ -3,7 +3,8 @@
 Every key is overridable by environment variable, with `__` for the nesting separator:
 `Serval__Ingest__SnapshotFps=2`, `CameraModule__Asr__Language=en`.
 
-The module pulls **no** configuration from the Server. They are configured independently.
+The optional [`Serval.CameraModule`](../CameraModule/Serval.CameraModule/README.md) edge worker
+pulls **no** configuration from `Serval.Server`. The two processes are configured independently.
 
 ## Three tiers, and which one a setting is in
 
@@ -104,9 +105,9 @@ writable list means following that pattern; `SettingsOverlayTests` pins it.
 **The per-setting reference is the catalogue itself.** Every editable setting's label, help text,
 bounds, unit and restart requirement live in
 [`SettingsCatalog.cs`](../Server/Serval.Server/Configuration/SettingsCatalog.cs), and the App shows
-that text beside each field at *Settings → Server settings* — so a prose copy here would only
-drift, and had. What the catalogue cannot express is above: the tier a setting is in, the list
-trap, and the environment-only keys.
+that text beside each field at *Settings → Server settings* — keeping a separate prose copy here
+would drift from the code. What the catalogue cannot express is above: the tier a setting is in,
+the list-binding trap, and the environment-only keys.
 
 The measured tuning guidance — what the detection knobs cost and where their defaults came from —
 is in [detection.md](detection.md).
@@ -199,10 +200,10 @@ setting stored, reported, and not in use is worse than one that was never offere
 
 ### Vision
 
-- `Motion.MinChangedFraction` / `MaxChangedFraction` — per-camera, and the one thing worth
-  measuring with `--motion` rather than guessing. The upper bound rejects whole-frame changes as
-  lighting rather than movement; drop it if IR-cut transitions still get through, raise it if
-  legitimately busy scenes are being ignored.
+- `Motion.MinChangedFraction` / `MaxChangedFraction` — per-camera, and worth measuring with the
+  [`Serval.CameraModule.Tools --motion`](testing.md#calibrating-a-camera) diagnostic rather than
+  guessing. The upper bound rejects whole-frame changes as lighting rather than movement; drop it if
+  IR-cut transitions still get through, raise it if legitimately busy scenes are being ignored.
 - `Vision.Enabled` — off by default; costs a 2.3 GB model download and seconds of CPU per
   description.
 - `Vision.MaxFrames` — how many consecutive frames a description is shown. `1` restores
@@ -223,8 +224,9 @@ setting stored, reported, and not in use is worse than one that was never offere
 
 ### Speakers
 
-- `Speaker.ClusterThreshold` — **the number that decides whether diarization is useful**, and it
-  can only be chosen by measurement. The fixture results are in
+- `Speaker.ClusterThreshold` — controls how aggressively embeddings merge into one speaker, and
+  should be calibrated with [`Serval.CameraModule.Tools --speakers`](testing.md#calibrating-a-camera)
+  on audio recorded through the target microphone. Fixture measurements are in
   [detection.md](detection.md#tuning-the-models).
 - `Speaker.SilenceTimeoutMinutes` — how long the room must be quiet before a conversation ends,
   its audio is diarized, and speaker identity resets.
@@ -284,8 +286,10 @@ by whatever means backs up a disk. This file is for the part a disk image cannot
 Two things belonging to notifications are also absent, for a different reason: they are not
 configuration. A push *subscription* belongs to a browser rather than to a person — it expires on
 its own, is re-registered every launch, and one restored onto another machine would name a device
-that deployment has never spoken to. The VAPID signing key is left out as described under
-[Notifications](#notifications).
+that deployment has never spoken to. The VAPID signing keypair is generated automatically per
+deployment in MongoDB's `server_secrets` collection (alongside the JWT signing key) and is tied to
+those browser subscriptions, so restoring an old VAPID key onto a new server would break active
+subscriptions there; see [alerts.md](alerts.md).
 
 **It carries secrets in plain text** — every camera's ONVIF password, any `user:password` inside a
 stream URL, and every account's password hash. That is deliberate: a backup that strips them

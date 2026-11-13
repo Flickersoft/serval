@@ -1,25 +1,25 @@
 # Deploying the Server
 
-**Start from [deploy/compose.yaml](../deploy/compose.yaml)** — the whole stack (server +
-MongoDB + the go2rtc sidecar for WebRTC) in one file that runs unedited, with no `.env`. Every
-value worth changing is a `${VAR:-default}`, overridden from an optional `.env` beside it
-([.env.example](../deploy/.env.example) lists them). Each release attaches the file, so an install
-needs no clone:
+**Start from [deploy/compose.yaml](../deploy/compose.yaml)** — it defines the server, MongoDB, and
+the `go2rtc` WebRTC sidecar with built-in defaults for every setting (`${VAR:-default}`). Optional
+overrides can be placed in a `.env` file beside `compose.yaml` ([.env.example](../deploy/.env.example)
+lists the supported variables). Each GitHub release attaches `compose.yaml` directly:
 
 ```bash
 curl -fsSLO https://github.com/Flickersoft/serval/releases/latest/download/compose.yaml
 docker compose up -d
 ```
 
-This document is the detail behind it: why the stack is shaped that way, and the levers that are
-not in the quickstart. Two tuned real-hardware references, and the Google Home override, live in
+This document covers Docker volume and device setup, image tags, AI model installation, secrets,
+TLS exposure, and GPU offload. Hardware-specific compose files and the Google Home override live in
 [deploy/examples/](../deploy/examples/README.md).
 
-The image itself is built by [the Dockerfile](../Server/Serval.Server/Dockerfile) (ASP.NET
-runtime + ffmpeg); [Server/docker-compose.yml](../Server/docker-compose.yml) is the developer
-stack that builds it from the working tree.
+The server image is built by [Server/Serval.Server/Dockerfile](../Server/Serval.Server/Dockerfile)
+(ASP.NET runtime + `ffmpeg`); [Server/docker-compose.yml](../Server/docker-compose.yml) builds it
+from a local checkout for development.
 
-For the edge module's own deployment, see [rk3588.md](rk3588.md).
+For deploying the optional `Serval.CameraModule` edge worker on an Orange Pi 5 / RK3588 SBC, see
+[rk3588.md](rk3588.md).
 
 ## Docker
 
@@ -37,9 +37,9 @@ runtime instead. Software encode needs neither — just more CPU.
 
 For **GPU utilisation on the status page**, that mapping is enough on AMD. Intel publishes no
 busy-percent file and reports usage through system-wide perf counters instead, so it also needs
-`cap_add: [PERFMON]` — commented out in every compose file, and named on the page itself when it is
-missing. See [configuration.md](configuration.md#vitals). It grants reading performance
-counters for the whole machine, nothing else, and takes effect on `--force-recreate`.
+`cap_add: [PERFMON]` — commented out in the compose files, and noted on *Settings → Server status*
+when missing. It grants read access to host performance counters and takes effect on
+`docker compose up -d --force-recreate`.
 
 The **go2rtc** service publishes port `8666` (WebRTC media) and is reached by the server on its
 internal API port `1984`, which stays unpublished. Its whole config is inline on its command line,
@@ -87,8 +87,7 @@ patch, minor or major:
 git tag v0.4.2 && git push origin v0.4.2
 ```
 
-[releasing.md](releasing.md) is the maintainer's side of that line: the seven steps from a merged pull
-request to a published release, and the two rules that keep it from going wrong.
+[releasing.md](releasing.md) covers the maintainer workflow for tagging and publishing a release.
 
 A push to `main` is not a release. It publishes `edge` and its `sha-` tag, consumes no version
 number, and stamps the last released version into the assembly — the revision is what tells two
@@ -102,8 +101,8 @@ $ curl -s -H "Authorization: Bearer $TOKEN" http://<host>:8080/api/system/versio
 {"version":"0.4.2","revision":"abc1234…"}
 ```
 
-The App shows the same pair under *Source* in the icon rail — the version to quote, the commit
-because that is what AGPL section 13 actually offers.
+The App displays the same version and git revision under the *Source* link at the bottom of the left
+navigation rail (providing the exact source link required by AGPLv3 section 13).
 
 ## Deploying to a server
 
@@ -136,7 +135,8 @@ capability is opt-in, each behind its own switch with `Serval__ServerAi__Enabled
 and each loads only if its weights are present, so the order is: get the files, flip the
 switches, restart.
 
-**From the App: Settings → AI models.** Tick the models, press the button, then *Restart now*.
+**From the App: Settings → AI models.** Tick the desired capabilities, click **Download `<size>` and turn on**
+(or **Turn on** when weights are already present), then click **Restart now**.
 The server runs its own copy of [fetch-models.sh](../scripts/fetch-models.sh) into the models
 volume with `SKIP_*` flags for what was not ticked, checks every file landed, writes the switches
 into the settings overlay, and the restart loads them. A download interrupted by a restart is
@@ -198,10 +198,9 @@ Left unset, the server generates 32 random bytes on first boot and keeps them in
 upgrades and is never written anywhere this repository can publish. Anyone who can read that
 collection can already read every account and camera credential beside it.
 
-Set `Serval__Auth__SigningKey` (`SERVAL_SIGNING_KEY`) to supply your own instead. A supplied value
-is held to the old rule: the server refuses to start while it reads `CHANGE-ME` or another
-placeholder, or is under 32 characters — this repository is public, so anything shipped in a
-compose file here is a value an attacker already has.
+Set `Serval__Auth__SigningKey` (`SERVAL_SIGNING_KEY`) to supply your own key instead. When supplied
+explicitly, the server refuses to start if the value is shorter than 32 characters or matches known
+placeholder strings such as `CHANGE-ME`.
 
 ```bash
 openssl rand -base64 32
@@ -215,10 +214,10 @@ account exists. So finish it before the port is reachable by anyone you do not t
 defaulting to `admin`) to have the account created at boot and the page never shown. That value
 is read only while there are no accounts, and refused at startup if it is a placeholder.
 
-`Serval__ApiKey` is the third secret and behaves differently: it is the shared secret a CameraModule
-presents when POSTing telemetry, and leaving it unset **closes** that route rather than opening it.
-A Server with no edge modules needs no key and is unaffected; the boot log says so once, so a module
-retrying against a 401 is diagnosable from the other end of the wire.
+`Serval__ApiKey` is the shared secret an optional `Serval.CameraModule` edge worker presents in
+`X-Api-Key` when POSTing telemetry, and leaving it unset **closes** that route rather than opening
+it. A Server with no edge modules needs no key and is unaffected; the startup log notes when the
+route is disabled so a 401 from an edge worker is easy to diagnose.
 
 The [Google Home integration](google-home.md) adds two more of that kind —
 `Serval__GoogleHome__ClientId` and `__ClientSecret` — and they follow the same rule: unset closes
@@ -251,8 +250,8 @@ network where everything on it is already trusted:
 Reaching it from outside means one of two things, and a VPN — Tailscale, WireGuard — is the simpler
 one, because it leaves every default above correct rather than needing each to be changed.
 
-The other is a reverse proxy terminating TLS. With Caddy that is two lines, and it obtains the
-certificate itself:
+The other option is a reverse proxy terminating TLS (for example, Caddy, which provisions ACME
+certificates automatically):
 
 ```caddyfile
 serval.example.com {
@@ -261,20 +260,26 @@ serval.example.com {
 ```
 
 Behind either, set `Serval__Cors__AllowedOrigins` to the App's real origin and
-`Serval__OpenApi__Enabled=false`. Do not publish port `8666` (go2rtc's WebRTC media) or `1984`
-(its API — unauthenticated, and it holds every camera's RTSP credentials).
+`Serval__OpenApi__Enabled=false`. Never publish or forward `go2rtc`'s port `1984` (its HTTP API is
+unauthenticated and holds every camera's RTSP credentials). Forwarding `go2rtc`'s media port `8666`
+(UDP and TCP, which only accepts DTLS-SRTP sessions negotiated via authenticated
+`POST /api/cameras/{id}/webrtc`) is optional: forward it for remote WebRTC live view, or leave it
+closed if remote viewers only need the ~1 fps snapshot and recorded replay. (`compose.yaml`
+discovers the public IPv4 via STUN and the `Host` header automatically; set
+`SERVAL_WEBRTC_CANDIDATES=<public-ip>:8666` when using split-horizon DNS, a CDN/proxy IP that
+differs from your WAN IP, IPv6, or an example compose file that replaces `stun:8666`.)
 
-Two things follow from having TLS that are easy to attribute to the wrong cause:
+Three browser behaviors differ between HTTP and HTTPS:
 
-- **Talk-back only works over HTTPS.** Browsers gate microphone access on a secure context, so on
-  plain HTTP the button is there and the audio silently never arrives.
-- **Push notifications need HTTPS too, and there is no degraded mode.** Service workers and
-  `PushManager` are both withheld outside a secure context, so on plain HTTP there is nothing to
-  register and no subscription to make. Unlike the two above this one says so: *Settings →
-  Notifications* draws its switch dead and explains why, rather than offering something that cannot
-  work. `localhost` counts as secure, so development never sees it.
-- **The App stores its session in plain `localStorage` on plain HTTP.** `flutter_secure_storage`
-  refuses to work outside a secure context, and the fallback holds a refresh token good for 30 days.
+- **Talk-back requires HTTPS.** Browsers only grant microphone access (`getUserMedia`) in a secure
+  context (`https://` or `localhost`). On plain HTTP, the App disables *Hold to talk* and notes
+  `Talk-back needs HTTPS`.
+- **Push notifications require HTTPS.** Service workers and `PushManager` are unavailable outside a
+  secure context; *Settings → Notifications* disables the toggle on plain HTTP and explains why.
+  `localhost` counts as a secure context, so local development does not hit this.
+- **Session storage falls back to `localStorage` on plain HTTP.** `flutter_secure_storage` requires
+  Web Crypto (`window.crypto.subtle`, secure-context only), so plain HTTP stores the 30-day refresh
+  token in unencrypted `localStorage`.
 
 Note that a VPN alone does **not** fix the first two: a Tailscale or WireGuard address over plain
 HTTP is not a secure context either. Only real TLS is — which for a LAN name means either a reverse
@@ -311,11 +316,12 @@ models or the fetch-models one-shot copies into place; an export is not byte-rep
 one copy is made once by [.github/workflows/detector-model.yml](../.github/workflows/detector-model.yml),
 published as a release, and fetched at image build against pinned checksums. For any other model,
 export both files with [`scripts/export-detector.sh`](../scripts/export-detector.sh) and see the
-note in [`fetch-models.sh`](../scripts/fetch-models.sh). Missing either
-one is a startup *warning* and a fall back to the motion gate, never a failure to start; a model
-that is present but is not the end-to-end head is fatal, because there is nothing useful to decode
-it into. Note that a labels file disagreeing with the weights is *not* caught — that head declares
-no class count to check one against, so it stays a live hazard rather than a startup error.
+note in [`fetch-models.sh`](../scripts/fetch-models.sh). Missing either file logs a startup *warning* and falls back to the motion gate rather than failing
+to start. An ONNX model that is present must use YOLO's post-NMS end-to-end output format (a single
+`[1, N, 6]` tensor of `[x1, y1, x2, y2, score, class_id]`, as produced by YOLO26 or `end2end=True`
+exports); other ONNX output shapes fail fast at startup. Note that a labels file disagreeing with
+that head's weights is *not* caught at load time because a `[1, N, 6]` tensor does not declare its
+class count in its shape.
 
 **`Serval__Ai__Detection__Device` selects what runs it**, as one `runtime-device` name: `onnx-cpu`
 (the default), `onnx-cuda`, `onnx-openvino`, `onnx-tensorrt` or `tflite-edgetpu` (Coral, x86 only).
@@ -356,10 +362,11 @@ either way, so a config backup restores onto a host with different hardware; an 
 is nonetheless set shows as the selection with its reason attached, since that is a deployment whose
 choice is being ignored and there is nowhere else to see it.
 
-Detection runs on raw frames ffmpeg has already scaled — no JPEG decode and no resize on the .NET
+Detection runs on raw frames `ffmpeg` has already scaled — no JPEG decode and no resize on the .NET
 side; the buffer is cropped and converted straight into the shape the detector declared. The
-`camera-module-tools` diagnostics (`--detect`, `--replay-gates`) read stills from disk and decode
-them through the same `FramePreparer` path, so their scores match a deployment's.
+[`Serval.CameraModule.Tools`](testing.md#calibrating-a-camera) CLI diagnostics (`--detect`,
+`--replay-gates`) read stills from disk and decode them through the same `FramePreparer` path, so
+their scores match live server runs.
 
 Measured on a Ryzen 9 7950X3D, against real 4K driveway footage and YOLO26n:
 
@@ -387,7 +394,7 @@ The figure to check on a given host is the per-frame median in the detector's ow
 Two settings govern the frames themselves, and they are separate from the wall's snapshot rate on
 purpose — the dashboard wants a picture a second, detection wants temporal resolution:
 
-- `Ingest:DetectFps` (default `1`) — frames a second handed to detection. Cheap on the camera side,
+- `Ingest:DetectFps` (default `2`) — frames per second handed to detection. Cheap on the camera side,
   because those frames are already being decoded to produce the snapshot; what it multiplies is how
   much inference is asked for. Zero turns detection frames off entirely.
 - `Ingest:DetectFrameWidth` (default `1920`) — how wide those frames are. Not the detector's input

@@ -6,9 +6,9 @@ an AI assistant answer questions like these from your own cameras. It serves a
 speaks MCP can connect: Claude, Gemini, ChatGPT, editors such as VS Code and Cursor, and others.
 Nothing in Serval is specific to one of them.
 
-It is **off by default**, and it is **read-only**. An assistant can look at the cameras and read what
-Serval noticed. It cannot change a setting, move a camera, save or delete anything, or so much as mark
-an alert read.
+It is **off by default**, and it is **read-only**. An assistant can view camera stills and query
+telemetry, alerts, and saved clips; it cannot modify settings, move PTZ cameras, create or delete
+records, or mark alerts as read.
 
 ## Before you start
 
@@ -74,7 +74,7 @@ bound to the address it was issued for.
 
 ## Connecting an assistant
 
-Every MCP client works the same way. Give it the connector address and it does the rest:
+Every MCP client uses the same OAuth 2.1 flow once configured with the connector address:
 
 1. It finds Serval's sign-in endpoints from the address.
 2. It identifies itself to Serval.

@@ -3,8 +3,8 @@
 Serval's memory is dominated by things that are not the server: one ffmpeg per stream, a model on
 the GPU, and page cache from writing recordings. The process itself is the smallest part of it. That
 is why the per-service `mem_limit` figures in [deploy/examples/](../deploy/examples/) look larger
-than the code would suggest, and why the number the app reports is not the number `docker stats`
-reports.
+than the code would suggest, and why the number the app reports differs from both `ps` and raw
+`memory.current`.
 
 Everything below was measured on one reference host unless it says otherwise: an Intel N100, four
 cores, 15.4 GiB usable, seven cameras, Coral USB detection, and the full AI stack with
@@ -88,13 +88,15 @@ The app warns at 90% of the container's limit, and the figure behind it is **not
 ([CgroupV2.cs](../Server/Serval.Server/Vitals/CgroupV2.cs)) — reporting the raw figure would read as
 100% forever on any host whose media volume is not ZFS.
 
-Two things follow, and both surprise people:
+Two details explain how this metric compares with cgroup and container tools:
 
-- **`active_file` is not subtracted.** On the reference host that is ~2.2 GiB of page cache —
-  genuinely reclaimable — counted against the threshold. The reported percentage is deliberately
-  conservative and reads high on a healthy NVR.
-- **`docker stats` will not agree with the app**, and the app is the one worth watching. `docker
-  stats` shows the charge including all cache.
+- **`active_file` is not subtracted.** On the reference host that is ~2.2 GiB of reclaimable page
+  cache counted toward the 90% threshold, so the reported percentage is conservative and reads high
+  on a busy NVR.
+- **`docker stats` uses this same formula; raw `memory.current` does not.** On cgroup v2, *Server
+  status*, `docker stats`, and cAdvisor all subtract `inactive_file` (`memory.current - inactive_file`).
+  Tools that display raw `memory.current` without subtracting `inactive_file` include all page cache
+  and will report a higher figure.
 
 So the level itself says less than you would expect — where it settles depends on how many cameras
 are recording and how much limit is left for cache to grow into. What matters is the shape: a

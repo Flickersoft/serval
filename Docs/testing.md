@@ -22,9 +22,9 @@ file-source camera, not unit-tested.
 
 ### A camera with no camera
 
-A camera may point at a local video file instead of an RTSP URL; ffmpeg loops it in realtime as
+A camera may point at a local video file instead of an RTSP URL; `ffmpeg` loops it in realtime as
 a stand-in, so the whole pipeline — segmenting, snapshots, the recording index, playback — runs
-with no hardware. This is the server's equivalent of the module's `--replay`.
+with no hardware (the server-side counterpart to `Serval.CameraModule.Tools --replay-gates`).
 
 ```bash
 # a looped test clip as a pseudo-camera
@@ -96,7 +96,7 @@ mongosh serval --eval 'db.recordings.updateMany({}, {$set:{StartedAt: new Date(D
 # with Serval__Media__RetentionDays=1 and Serval__Media__RetentionSweepMinutes=1
 ```
 
-The camera's `.m4s` files go; `clips/$ID.mp4` stays and still plays. **This is the feature.**
+The camera's `.m4s` files are pruned while `clips/$ID.mp4` remains on disk and playable.
 
 Worth exercising alongside it: kill the Server mid-write and restart it — the clip left `writing`
 must come back `failed` with its partial file removed, rather than sitting in that state forever.
@@ -324,65 +324,51 @@ cd App/serval_app && flutter test
 ```
 
 Hermetic — no Server, no network.
-[`test/widget_test.dart`](../App/serval_app/test/widget_test.dart) covers the
-routing and the wall/camera split. [`test/golden_capture_test.dart`](../App/serval_app/test/golden_capture_test.dart)
-renders every screen at the design's 1440x900 with the real fonts, so drift from the mock
-fails the build; regenerate with `flutter test --update-goldens` and look at the PNGs in
-[`test/goldens/`](../App/serval_app/test/goldens/). Which goldens move is itself a signal — a
-change to one screen that shifts another means something leaked between them. The `on a phone`
-group captures the compact designs at 412x892 instead — the wall's sheet at rest, raised and as the
-filter, one camera at its peek and stowed, and the settings index. Those exist because the phone is where the App
-diverges most from the desktop it was drawn for, and until round 11 it was pinned only by widget
-tests measuring one figure each: enough to say a sheet is 236 tall, and nothing about what is in
-it.
+[`test/widget_test.dart`](../App/serval_app/test/widget_test.dart) covers routing and the
+wall/single-camera split. [`test/golden_capture_test.dart`](../App/serval_app/test/golden_capture_test.dart)
+renders the primary desktop screens at 1440×900 with the bundled fonts; regenerate baselines with
+`flutter test --update-goldens` and inspect the PNGs in
+[`test/goldens/`](../App/serval_app/test/goldens/). Which goldens change is itself a signal — a
+change to one screen that shifts another indicates shared widget leakage. The `on a phone` group
+captures compact mobile layouts at 412×892 (the wall's bottom sheet at rest, raised, and in filter
+mode; the single-camera view at peek and stowed detents; and the mobile settings index).
 [`test/cameras_screen_test.dart`](../App/serval_app/test/cameras_screen_test.dart)
 lays the settings form out for every camera and asserts no exception — it is the one screen with a
 dense two-column form inside a scroll view, which is where unbounded-constraint and overflow bugs
 live, and they fail nothing else. Note it does **not** load the vendored fonts: the fallback
 metrics are wider than Inter, which makes it a stricter overflow test than the real thing.
 
-Two suites run narrow, and everything else runs at 1200px or wider. That split is the point: the
-wide suites pin the columns, these pin what replaces them, and both answers are correct depending
-only on the size.
+Two suites run narrow, and everything else runs at 1200px or wider. That split is deliberate: the
+wide suites test the multi-column desktop layout and the narrow suites test the mobile drill-down
+and bottom-sheet layouts.
 
-### The one screen with no golden
+### Clip-trimmer mode (tested structurally rather than by golden)
 
-Round 12 — the camera screen as a trimmer — is pinned by
-[`test/clip_mode_test.dart`](../App/serval_app/test/clip_mode_test.dart) rather than by a capture,
-and the reason is worth knowing before anyone adds one. The trimmer opens around the playhead,
-which live is the wall clock: every tick label, both time fields and the range named in the button
-are different on every run, so a pixel comparison fails a minute after it is baked. What that
-screen is *for* is structural anyway — that the press enters a mode rather than starting an export,
-that the ways off the screen go inert while a range is being set, and that the two ways of moving
-an end agree about which end is moving.
+The camera screen's clip-trimmer mode is covered by
+[`test/clip_mode_test.dart`](../App/serval_app/test/clip_mode_test.dart) rather than by a golden
+image. Because the trimmer opens around the live wall-clock playhead, its tick labels, time inputs,
+and button range change every minute and would make a pixel golden non-deterministic. The widget
+test instead verifies structural behavior: entering clip mode without immediately exporting,
+disabling navigation away while trimming, and keeping drag handles synchronized with time inputs.
 
-The arithmetic underneath it is
-[`test/clip_selection_test.dart`](../App/serval_app/test/clip_selection_test.dart), which is where
-the real risk lives: every case there decides what ends up in a saved file rather than what a
-screen looks like, and getting one wrong keeps the wrong minute — which nobody notices until the
-clip is the only copy left.
+The range math underneath it is tested in
+[`test/clip_selection_test.dart`](../App/serval_app/test/clip_selection_test.dart), which verifies
+segment snapping and clamping across session boundaries.
 
-[`test/settings_compact_test.dart`](../App/serval_app/test/settings_compact_test.dart) is design 7b
-at 412x892 — the settings drill-down. It drives the real router, because a drill-down navigates and
-a harness that pumps one screen cannot see it move.
+[`test/settings_compact_test.dart`](../App/serval_app/test/settings_compact_test.dart) tests the
+412×892 mobile settings drill-down against the full router so push/pop transitions are exercised.
 
-[`test/camera_compact_test.dart`](../App/serval_app/test/camera_compact_test.dart) is design 8 at
-three sizes: 412x892 for the phone held upright, 892x412 for the phone turned, and 900x600 for the
-case those two must not swallow — a desktop window somebody squashed, which is also wider than it
-is tall and must keep its chrome. What it pins beyond layout: that the picture's bottom edge is the
-tray's top edge at every detent, that the tray's peek is **measured** from what it is carrying —
-press *Snapshot* and the tray grows by the line that appears rather than taking it from the feed,
-which is the regression test for the estimate this replaced — that the tray never reaches over *Hold
-to talk*, that a fling steps one detent rather than crossing the whole travel, that a drag past the
-peek stows the tray to a bar that is only its name and gives the picture the rest of the screen,
-that a tap on that bar is a way back that does not need the 18px handle, that clicking a row
-puts the tray down, that expanding *rotates* rather than stretching, that the mode is left when the
-window grows back to a desktop, and that the wall's feed is a tray at one size and a column at the
-other. There is also a sweep that drives every detent at four window sizes and asserts only that
-nothing throws: nothing divides a budget any more, so what used to need arithmetic to fit now only
-needs somewhere to be. The wall at 412px is covered here rather than in the settings
-suite because it only started laying out at all in round 8 — before that its 376px column left the
-timeline track under a pixel wide and `_TrackGeometry` threw on the clamp.
+[`test/camera_compact_test.dart`](../App/serval_app/test/camera_compact_test.dart) tests the
+responsive camera and wall layouts across three sizes: 412×892 (portrait phone), 892×412 (landscape
+phone), and 900×600 (narrow desktop window, which is wider than tall and must keep desktop chrome).
+Beyond layout, it verifies that the video stage's bottom edge tracks the sheet's top edge at every
+detent, that the `peek` detent height is measured dynamically from its header controls (growing when
+status lines appear rather than stealing height from the feed), that the sheet never covers *Hold to
+talk*, that flings step one detent at a time, that dragging past `peek` stows the sheet to a 52px
+title bar and tapping that bar restores it, that clicking a feed row lowers the sheet, that
+fullscreen rotates portrait phones into landscape, and that resizing back above `compactWidth`
+restores the desktop column. It also sweeps every detent across four viewport sizes to verify no
+layout overflow occurs.
 
 The rest pin the parts that would otherwise fail silently against a real Server: the telemetry
 documents (from payloads copied off a live one), the wall socket's binary frame format, the camera
@@ -433,16 +419,14 @@ segment apart, so the controller subtracts `EXT-X-START:TIME-OFFSET` from every 
 to every seek. Nothing in the app *looks* wrong when that term is missing — the timestamp pill is
 merely a few seconds fast — which is exactly why it went unnoticed until detection boxes were drawn
 over the same frames and sat 43 px behind a walking object.
-[`timeline_ticks_test.dart`](../App/serval_app/test/timeline_ticks_test.dart) is worth singling out: against the
-design's own capture time the derived tick labels come out *identical* to the strings the scaffold
-had hard-coded, which is what says the rounding rule is the design's and not one invented to
-replace it.
+[`timeline_ticks_test.dart`](../App/serval_app/test/timeline_ticks_test.dart) verifies timeline tick
+rounding and label formatting across span widths.
 
-`ServalApp` still defaults to [`SampleServalRepository`](../App/serval_app/lib/data/sample_repository.dart) — the
-design's own content — so the tests and goldens render the mock rather than whatever a live NVR
-happens to be looking at. `main()` builds the live one. Its `vodUrlFor` returns null, which is what
-keeps `flutter test` from ever constructing a player; `widget_test.dart` asserts that a tap on the
-scrubber stays on the live placeholder, so that property cannot rot silently.
+`ServalApp` defaults to [`SampleServalRepository`](../App/serval_app/lib/data/sample_repository.dart)
+so unit and golden tests render deterministic fixture content without a Server, while `main()`
+wires `LiveServalRepository`. `SampleServalRepository.vodUrlFor` returns `null` so `flutter test`
+never instantiates a native video player; `widget_test.dart` asserts that tapping the scrubber in
+sample mode stays on the live placeholder.
 
 ### Against a real Server
 
@@ -513,9 +497,9 @@ recording fault. `enable=` is the timeline mechanism and is what produces the ab
 Then point a camera at it, let it record a few minutes, pull the window back through `vod.m3u8`,
 cut it to frames at 1 fps, find the object in each one, and post *that* as a detection episode
 through `POST /api/cameras/{id}/telemetry`. The track is now ground truth for the footage, so a box
-that does not sit on the object is a real defect rather than a fixture that drifted. Both bugs in
-[app-notes.md](app-notes.md#what-still-has-no-backend-source) — the letterbox and the playlist start
-offset — were found this way and are invisible any other.
+that does not sit on the object is a real defect rather than a fixture that drifted. Both alignment
+constraints documented in [app-notes.md](app-notes.md#ui-placeholders-and-omitted-fields) —
+letterbox aspect alignment and `EXT-X-START:TIME-OFFSET` compensation — can be verified this way.
 
 The live view cannot be checked like this: go2rtc cannot serve a file, so a file-source camera has
 no WebRTC session and the pseudo-camera trick stops at replay. The letterbox arithmetic is pinned
@@ -590,7 +574,7 @@ The two states that are not failures, and are worth producing deliberately:
 
 * **`unavailable`** — post a module alert dated before the buffer reaches (`POST
   /api/cameras/{id}/telemetry` with an old `timestamp` and `is_alert: true`). No footage, no files,
-  and the card draws its camera's stripe.
+  and the card renders the diagonal-stripe placeholder.
 * **`recorded: false`** — `PUT` the camera with `"recording": false`. The detect session and its
   ring carry on; the recorder stops. The alert still gets a full preview, and only *Watch*
   disappears. This is the case the whole feature exists for, so it is worth seeing at least once.

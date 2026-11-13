@@ -1,7 +1,13 @@
 # App notes
 
-Why the Flutter client is shaped the way it is, and which parts of the design have no Server
-behind them. Paths are relative to [`App/serval_app/`](../App/serval_app/).
+Architecture notes for the Flutter web and Linux desktop client ([`App/serval_app/`](../App/serval_app/)),
+covering state management, routing, responsive layout, timeline replay, and UI placeholders.
+
+The client uses a custom dark theme and widget set called **Nocturne**
+([`lib/theme/nocturne.dart`](../App/serval_app/lib/theme/nocturne.dart)). On desktop (`≥ 950px`),
+the main shell consists of a 64px left navigation rail, the camera wall or settings view, and a
+376px *What's happening* activity column; below `950px`, the rail is omitted, settings become a
+drill-down list, and the activity feed moves into a draggable bottom sheet.
 
 ## Decisions worth knowing
 
@@ -69,10 +75,11 @@ picture — which is why
 [`picture_fit_test.dart`](../App/serval_app/test/picture_fit_test.dart) asserts the fits rather than
 trusting a golden to notice.
 
-The bars are `Serval.tile`, the video ground, rather than whatever is underneath — so they read as
-the edge of the picture instead of as the camera's stripe showing through it. Where the picture is
-fetched rather than held, the ground appears with the first frame and not before: the stripe is what
-says *a picture is coming*, and flat grey under a poster still in flight says the opposite.
+The letterbox/pillarbox bars use `Serval.tile` (the dark video background token) rather than the
+parent surface, so they read as the frame boundary rather than exposing the diagonal-stripe loading
+placeholder behind the image. Where an image is fetched over HTTP, `Serval.tile` appears only once
+the first frame arrives so the diagonal-stripe placeholder remains visible while the request is in
+flight.
 
 ### The phone
 
@@ -142,9 +149,9 @@ picture underneath to aim by, which is why *Move* is a way into it. The timeline
 transcript does not; without a seek bar, landscape would be live-only with no way back into the
 recording short of turning the phone upright.
 
-**The design's *Conversation | Activity* tabs are not implemented, deliberately** — they are the
-same data seen twice. [`ActivityPanel`](../App/serval_app/lib/widgets/activity_panel.dart) records
-why. The phone gets the merged list.
+**Conversation turns and activity events share one merged list** rather than separate
+*Conversation* and *Activity* tabs, since both render from the same underlying telemetry stream (see
+[`ActivityPanel`](../App/serval_app/lib/widgets/activity_panel.dart)).
 **"What's happening" is a column on a desktop and a tray on a phone — one tray, both screens.** A
 376px column at 412px wide is the whole screen, and a fixed band takes 292px whether or not you are
 reading it. [`ActivitySheet`](../App/serval_app/lib/widgets/activity_sheet.dart) floats over what is
@@ -161,9 +168,9 @@ raising the tray is an act of reading the feed and a wall that grew room to scro
 would be rearranging itself behind a sheet that is covering it anyway. The settled height and not
 the live one, on the same 240ms `easeOutCubic`, for the reason the picture uses it. A scroll offset
 is the reader's, so the tiles do not float back up when the tray rises — the *room* to scroll them
-clear is what the padding promises, not a position. The raised detent is derived from the tile
-rhythm rather than pinned at the design's 340, so "one camera whole overhead" stays true at two
-columns and on a screen of another height.
+clear is what the padding promises, not a position. The raised detent is derived from the first tile
+row's height rather than pinned to a fixed pixel constant, so "one camera row visible above the
+sheet" holds across both one- and two-column layouts and different viewport heights.
 
 The tray takes slots rather than knowing what is in it: `head` — the controls above the feed, which
 is also the thing `SheetDetent.peek` is measured from, and null on the wall — and `body`, a builder
@@ -274,13 +281,13 @@ entirely. A moment whose half hour has not happened yet gets the third kind of r
 bar half full of future — see the scrubber section. Inside the live edge there is nothing to replay
 and the screen keeps its default hour.
 
-**The camera panel is one feed, not a feed plus a transcript.** The design's two-sided bubbles are
-not drawn: nothing captures the outbound side of the push-to-talk, so every turn comes back
-attributed to *them*. A separate per-turn transcript would read the same cache the activity feed does
-and show everything a camera said twice. A settled conversation is **one row**, with its turns drawn
-inside it, each carrying the voice that said it, so the attribution you watch during a conversation
-does not vanish when it ends. What is given up is the clock time on each turn: the turns are ordered,
-not dated.
+**The camera panel is one feed, not a feed plus a separate chat transcript.** Because outbound
+push-to-talk audio goes directly to the camera via `go2rtc` without being recorded or transcribed,
+every transcribed turn comes from the camera's microphone rather than forming a two-sided
+viewer/camera chat. A separate transcript view would read the same cache as the activity feed and
+duplicate every spoken line. A settled conversation renders as **one row** containing its ordered
+speaker-attributed turns inside it (turns are ordered within the conversation rather than carrying
+individual wall-clock timestamps).
 **Who spoke is a bubble on the quote; how they sounded is a glyph at its right.** Both marks go in
 the **body** rather than the heading, which is what lets the two screens share them — the wall's
 heading is already spoken for by the camera name. Never print the wire's own `speaker_0`: it is an
@@ -323,13 +330,13 @@ line the control has the column to itself, which is the only use of
 ### Forms and the wire
 
 **Fields are `EditableText`, so they must be
-[`NocturneEditableText`](../App/serval_app/lib/widgets/nocturne_editable_text.dart).** Nothing here
-uses `TextField` — it arrives with Material's underline, filled box and focus blue, which is the
-flood the design system forbids. But what comes with `TextField` and *not* with a bare
-`EditableText` is the whole pointer layer: dragging to highlight, double-click for a word,
+[`NocturneEditableText`](../App/serval_app/lib/widgets/nocturne_editable_text.dart).** Forms avoid
+Material's `TextField` (with its default underline, filled container, and focus highlight) in favor
+of Nocturne's 1px outline styling. However, `TextField` wires up pointer selection gestures that a
+bare `EditableText` omits: dragging to highlight, double-click for a word,
 triple-click for a line, a caret placed where you clicked, and the copy/paste menu. `EditableText`
 paints characters and takes keystrokes; the gestures live in
-`TextSelectionGestureDetectorBuilder`, which `TextField` wires up and nobody else does.
+`TextSelectionGestureDetectorBuilder`, which `NocturneEditableText` provides.
 
 The failure is quiet, because clicking still works: `RenderEditable` keeps a tap recognizer of its
 own, which places a caret *and claims the pointer*, so the second click and the drag never reach
@@ -380,18 +387,17 @@ permission sheet, which is why the button reports where the microphone has got t
 ([`MicrophoneGate`](../App/serval_app/lib/playback/microphone_gate.dart)) rather than assuming it
 has one.
 
-**A dead live view falls back to the wall's snapshot**, over the design's placeholder — a real frame
-from a second ago beats a black rectangle.
+**An unavailable WebRTC live view falls back to the wall's ~1 fps snapshot** rather than an empty
+placeholder.
 
 **PTZ controls are drawn from what the camera reports, never from its settings.** `ptzConfigured`
-means only that an ONVIF endpoint is set, and measured against the live NVR that was wrong for both
-of its cameras: the bullet camera has no PTZ service at all yet got a pad and a zoom slider, and the
-pan/tilt camera has a fixed lens and no stored presets yet got a zoom slider and a home key firing
-preset `'1'`. `ptzProbeFor` asks the camera instead, over a route separate from the registry read —
-probing is a live SOAP round trip, and `main` awaits `GET /api/cameras` before the first frame, so
-folding it in would cost every cold start an ONVIF timeout per unreachable camera. Where the camera
-cannot be reached the app draws no controls plus the Server's own words, because hiding them silently
-is indistinguishable from "this camera has no pan/tilt".
+means only that an ONVIF endpoint URL is set: a fixed bullet camera with ONVIF enabled has no PTZ
+service at all, and a pan/tilt camera with a fixed lens has no optical zoom or stored presets.
+`ptzProbeFor` queries `/api/cameras/{id}/ptz/capabilities` over a separate route from the camera
+registry read — probing is a live SOAP round trip, and `main` awaits `GET /api/cameras` before the
+first frame, so folding it in would delay cold start by an ONVIF timeout per unreachable camera.
+Where the camera cannot be reached, the app hides the controls and displays the Server's error
+message so an unreachable camera is distinguishable from one without PTZ hardware.
 
 **The centre key follows a ladder decided on the camera's answer** — real home position, else a
 preset named *home*, else the only preset, else a menu, else no key at all. Pinned in
@@ -486,16 +492,14 @@ and the browser client buffers the whole body, so Linux shows a live byte count 
   and every drag *inside* that window is a decoder seek with no request at all. The cost is a
   reopen roughly every fifteen minutes of continuous replay, which is one constant in
   [`ReplayController`](../App/serval_app/lib/playback/replay_controller.dart).
-- **Replay is wall-clock, so a break in the recording is played, not skipped.** An ffmpeg restart
-  leaves a real hole — on the live Server, a stack restart costs 20-odd seconds on every camera, a
-  few times a day. A window is clipped to the end of the run it starts in, and playback arriving
-  there hands over to a plate reading *No recording* while the playhead keeps advancing on a clock
-  at the current rate; the far side opens when the playhead reaches it. Stitching the two sides
-  together would put frames minutes apart in consecutive positions and leave no honest playhead —
-  the position-to-instant map assumes media time and wall time advance together, and across a hole
-  they do not. Clicking past the break on the scrubber skips it, which is what drawing it there is
-  for. The wall behaves the same way: its playhead is derived from a master clock, and a tile with
-  no footage draws a plate.
+- **Replay is wall-clock, so a break in the recording is played, not skipped.** Any `ffmpeg`
+  interruption leaves a gap in recorded segments (a full Server/stack restart leaves a ~20-second gap
+  across every camera). A window is clipped to the end of the contiguous run it starts in, and
+  playback arriving there hands over to a *No recording* plate while the playhead keeps advancing at
+  the current playback rate; the next segment run opens when the playhead reaches it. Stitching across
+  gaps would place frames minutes apart at consecutive positions and break wall-clock alignment.
+  Clicking past the gap on the scrubber skips straight to the next run. The wall replay mode behaves
+  the same way using a shared master clock.
 - **Both players seek by `at - windowFrom`, so `windowFrom` is the playlist's own media start** —
   the segment boundary at or before the instant asked for, *not* the instant. Passing the instant
   for both makes that difference zero, and a playlist opens at its own beginning: up to a whole
@@ -505,11 +509,10 @@ and the browser client buffers the whole body, so Linux shows a live byte count 
   `Player.open` resolves before libmpv has parsed the playlist, and `loadSource` attaches a
   MediaSource asynchronously.
 - **The scrubber's marks come from telemetry and its coverage from
-  `GET /api/cameras/{id}/coverage`**, *not* from `/api/cameras/{id}/recordings`. That route returns
-  one entry per segment — measured against the live Server, two hours is 1798 rows and 208 KB, so a
-  day is ~21,600 rows and megabytes of JSON — which is an expensive way to learn that the camera
-  recorded all day. `/coverage` is the same information merged into one span per ffmpeg session,
-  typically one to three for a day.
+  `GET /api/cameras/{id}/coverage`**, *not* from `/api/cameras/{id}/recordings`. `/recordings`
+  returns one entry per segment (~1,800 rows / ~208 KB for two hours, or ~21,600 rows per day),
+  whereas `/coverage` merges contiguous segments into one span per `ffmpeg` session (typically 1–3
+  spans per day).
 - **A fixed period is never refetched.** Its edges do not move, so the 30-second TTL would ask the
   same question forever; marks arriving meanwhile still ride the events socket. The span is clamped
   to 24 hours — the Server validates no maximum on `/coverage`, `/recordings` or `/vod.m3u8`, so
@@ -576,14 +579,12 @@ and the browser client buffers the whole body, so Linux shows a live byte count 
   `14:32:07 · Sounds` — so the palette teaches itself. Hover is a desktop reading; touch falls back
   to the colour alone, which is all the bar ever said.
 
-## What still has no backend source
+## UI placeholders and omitted fields
 
-Two kinds of thing are on this list, and the difference is visible in the code. Where the element
-is still **drawn** per the design, the use site carries a `// STUB:` saying what is missing — those
-are what `grep -rn STUB App/serval_app/lib` finds, and every one of them has a row below. Where the
-element was **dropped** instead, because a plausible-looking number was worse than an absent one,
-the reason sits at whatever draws the rest of that line — the camera's subtitle, the PTZ readout —
-and there is no marker to find.
+Two categories appear below. Where a UI element is still **rendered** with placeholder data, its
+call site carries a `// STUB:` comment (`grep -rn STUB App/serval_app/lib`) explaining what backend
+field is missing. Where an element was **omitted** rather than displaying an unverified estimate,
+the code omits the widget directly (for example, in the camera subtitle or PTZ readout).
 
 The object detector emits geometry, so the stage's `DetectionOverlay` is fed from telemetry, from
 whichever of two readings matches what is on screen:
@@ -657,12 +658,12 @@ so replay still drops it.
 | `2560 × 1920 · 20 fps · h264` per stream | The Server ffprobes internally and publishes nothing — and `SourceProbe` asks for `codec_name,width,height`, so the frame rate is not merely unpublished, it is never measured. |
 | Zoom factor (`2.4×`) | Not derivable rather than merely unsourced: ONVIF's generic zoom space is a fraction of the lens's travel, nothing publishes the optical range that would make it a magnification, and the curve between them is vendor-specific. The track reads a percentage of travel where the camera reports one — see [live-view.md](live-view.md#where-the-lens-actually-is) — and nothing where it does not. |
 | `up 26 days` | ONVIF's Device service exposes the system clock, not uptime. Make, model and firmware are real. |
-| The ready-made replies | No phrase store, and no way to play audio at a camera outside a live WebRTC session. Not rendered, and the widget was removed — when a phrase store exists this is a fresh build, not an un-commenting. |
-| A still at a past instant | `snapshot.jpg` is the *latest* frame, served from memory; no route extracts one from the archive, and there is no on-disk copy to fall back to — frames are consumed and deleted as the detector reads them, so the route 404s for about a second after a Server restart. So *Snapshot* can only ever save the live picture, and it is refused while replaying with the reason on the status line. This is also what empties the **poster on the Save-clip dialog**: the design puts a frame from the middle of the range behind the duration pill, `SaveClipDialog.poster` is declared for it, and there is nothing to pass. `/api/clips/{id}/poster.jpg` is that picture from the wrong side of the save — addressed by a clip id that does not exist until the save succeeds. |
-| `84 MB or so` on the Save-clip dialog | The one number in the App reasoned from the design rather than from a camera: `_assumedBytesPerSecond` is ~12 Mbps, which is what the mock's *84 MB for 55 seconds* works out at. `RecordingSegment` indexes `DurationSeconds` and no byte count, so nothing weighs the range today and the dialog says *or so* for that reason. It is measurable, though: a clip is a copy of the segments covering its range, and those are known and on disk, so summing their sizes would answer exactly. Worth naming because the retention projection two screens away is measured rather than estimated — see below — and on screen the two numbers look alike. |
-| *Dismiss* on a wall alert | Dismissing means *handled*, which is a claim about the alert and not about the screen it was clicked on — so it should survive a reload and reach everyone else watching the wall. The old control was a `Set` on one screen's state and did neither, so it was removed rather than left lying. **The route it wants now exists**: `POST /api/alerts/{id}/dismiss`, keyed by the detection's or sound's own id, which is exactly what an `ActivityItem` carries — see [alerts.md](alerts.md). What is left is deciding whether the wall clearing a card should also clear it from the Alerts queue, which is a product question rather than a missing endpoint. |
+| Quick-reply talk-back phrases | No server-side phrase store or pre-recorded audio playback route exists outside live microphone WebRTC talk-back, so quick-reply chips are omitted. |
+| A still at a past instant | `snapshot.jpg` serves only the *latest* in-memory frame (and 404s for ~1s after a Server restart); no route extracts arbitrary stills from archived HLS segments in the UI. *Snapshot* therefore saves only the live frame and is refused during replay with an explanatory status message. For the same reason, `SaveClipDialog.poster` has no pre-save thumbnail to display (`/api/clips/{id}/poster.jpg` exists only after the clip is written). |
+| `84 MB or so` on the Save-clip dialog | Estimated from a nominal `_assumedBytesPerSecond` (~12 Mbps) rather than summed from segment sizes, because `RecordingSegment` indexes `DurationSeconds` without byte sizes. (By contrast, the retention storage projection in camera settings *is* measured from actual on-disk directory sizes; see below.) |
+| *Dismiss* on a wall alert | Wall activity rows do not expose a *Dismiss* button yet; alert dismissal lives on `/alerts` (`POST /api/alerts/{id}/dismiss`; see [alerts.md](alerts.md)). |
 
-Some things the design left as stubs have a real source, derived rather than invented:
+Metrics derived from live Server endpoints:
 
 - **Offline** — snapshot staleness on the wall socket, which is what the model's own comment
   prescribed. A camera that is switched off reads as *turned off*, not as broken.

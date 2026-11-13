@@ -3,9 +3,10 @@
 How the Server gets a camera's bits onto disk, what it does and does not re-encode, and how a
 range comes back out as a file.
 
-A camera is pulled by one ffmpeg process producing two things from a single connection: HLS fMP4
-segments (which *are* both the recording and the live stream — the standard NVR trick) and
-a ~1 fps JPEG snapshot for the dashboard.
+A camera with a `record` stream is pulled by an `ffmpeg` process producing HLS fMP4 segments on disk
+(used for timeline replay, clip export, and live HLS playlists) alongside ~1 fps JPEG snapshots for
+the dashboard wall when `record` and `detect` share a stream. (Low-latency single-camera live view
+uses WebRTC via `go2rtc`; see [live-view.md](live-view.md).)
 
 A camera does not have to be recorded at all. The `record` role is optional — leave it off every
 stream and the camera runs the snapshot process alone: still watched, still alerting, still viewable
@@ -41,12 +42,12 @@ rejected rather than ignored.
 The request is checked against the encoders **this host's ffmpeg actually has** and rejected with a
 400 naming the missing one. See [Transcoding and hardware](#transcoding-and-hardware).
 
-**The trade you are now making by default is reach.** A deployment of HEVC cameras archives HEVC,
-which plays in Safari, Edge, and a Chrome with hardware decode — and not elsewhere. Each session
-says which codec it is archiving in its startup log line, and switching a camera to H.264 is one
-`transcode` field. Over WebRTC the same recording plays natively in Chrome 136+ and Safari 18+,
-which negotiate H265; go2rtc transcodes per viewer only for a browser that doesn't offer it
-(Firefox, and Edge, which ships the Chromium support disabled).
+**Stream-copy preserves the camera's source codec in the archive.** A deployment of HEVC cameras
+archives HEVC, which plays natively in Safari, Edge, and Chrome builds with hardware HEVC decode,
+and requires per-stream `transcode` to `h264` where broader playback compatibility is needed. Each
+session logs the codec it is archiving at startup. Over WebRTC, live streams play natively in
+Chrome 136+ and Safari 18+ (which negotiate H.265), while `go2rtc` transcodes on demand only for
+browsers that do not offer it.
 
 **Segment boundaries under copy.** A copy cannot insert a keyframe the source does not contain, so
 `-force_key_frames` only applies on the transcode branch. The HLS muxer instead starts each segment
@@ -119,9 +120,8 @@ MPEG-TS would be the obvious intermediate and was measured and rejected: its mux
 four codecs in `Ingest:VideoPassthroughCodecs` are exactly those.
 
 What cannot be joined is a camera that changed codec or resolution across a restart. The export
-stops there, which used to be logged and nothing else — the client got a 200 and a clip quietly
-shorter than it asked for, reading as missing footage rather than as a restart. Headers now say so,
-computed before a byte of the body is written:
+stops at that boundary and reports the actual exported span in response headers computed before any
+body bytes are written:
 
 ```
 Content-Disposition:      attachment; filename="front-door-20260802-140530.mp4"
@@ -136,8 +136,9 @@ A browser can read none of those without the CORS policy naming them in `WithExp
 `AllowAnyHeader` governs the *request* — so the policy lists every one. Without it the web build
 cannot even see the filename it is meant to save under, and only on web.
 
-One failure this cannot make honest: if ffmpeg dies mid-pipe the client already holds a 200 and a
-partial body. Buffering the export to fix that would defeat the reason it streams.
+One limitation of streaming the response directly: if `ffmpeg` fails mid-pipe, the HTTP `200` status
+and headers have already been sent, so the client receives a truncated body. Buffering the entire
+export on disk first to avoid that would defeat streaming large ranges.
 
 ### Or keeping it
 

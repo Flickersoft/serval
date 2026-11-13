@@ -185,7 +185,7 @@ inference. Pass the whole bus tree.
 from the host.*
 Bind-mounting the bus tree gives the container the nodes across re-enumeration, but the device cgroup
 still denies unlisted minors, so the newly-numbered node is refused. `c 189:* rmw` permits usb-device
-generally. Not `privileged: true`, which most guides reach for and which hands the container the host.
+nodes without granting full host access via `privileged: true`.
 
 **`edgetpu_create_delegate` needs write access to the device node.**
 *Symptom: "The device is present but could not be opened", as a non-root user.*
@@ -257,10 +257,11 @@ sudo dmesg --time-format iso | grep -iE "usb|xhci" | tail -20
 delegate creation as a matter of course, but repeatedly during steady-state inference means USB
 instability — check autosuspend (`usbcore.autosuspend=-1`, or a udev `power/control` rule).
 
-Losing a device is reported rather than inferred. The budget is rescaled within one reconcile tick, a
-`DetectionDegraded` alert names the device that went away, and the status page carries it — see below.
-Coverage alone will *not* show it: capacity halving turns into dropped frames, and coverage counts only
-shed regions.
+Losing a device is reported explicitly: the inference budget is rescaled within one reconcile tick, a
+`DetectionDegraded` alert is emitted naming the disconnected USB path, and *Settings → Server status*
+flags the missing device (see below). *Detection coverage* on the status page will *not* show a lost
+TPU on its own, because *Detection coverage* tracks voluntary region-crop shedding by the budget
+scheduler, whereas losing a device mid-run surfaces as dropped whole frames.
 
 ## On the status page
 
@@ -290,9 +291,10 @@ above, and the reason both are honest about the window they cover.
 
 Three readings worth knowing how to interpret:
 
-- **`Declining N frames a second because every device was busy`** — the pool is the bottleneck. This is
-  `DroppedWhileBusy`, and it is different from the shed regions under *Detection coverage*: the budget
-  did not refuse these, the hardware did.
+- **`Declining N frames a second because every device was busy`** — the TPU pool is saturated
+  (`DroppedWhileBusy`). Unlike shed region crops reported under *Detection coverage* (where the
+  scheduler skips optional close-up crops to stay within budget; see [detection.md](detection.md#where-the-detector-looks)),
+  these are frames refused because all TPU lanes were occupied.
 - **`2-2 has stopped answering`** — that device is sick and waiting out its 5 s reopen cooldown. It keeps
   its row, because a list that shrank would report a halved accelerator as a smaller healthy one.
 - **`not reported`, hatched** — fewer than two counter readings so far, which is the first five seconds
@@ -304,17 +306,24 @@ perturb the first window only — which is the window there is no previous readi
 Still no thermal figure, for the reason in the gotchas: `/sys/class/apex/*/temp` is the PCIe part. The
 throughput line over a long run remains the only thermal signal a USB Coral gives.
 
-## The model
+## Supported models
 
-Detection weights are not bundled, and the accelerator path needs **two** files that
-`fetch-models.sh` does not download: an `edgetpu_compiler` output and **its own labels file**.
+Coral Edge TPU weights are not bundled in the Server image and are not downloaded by
+`fetch-models.sh`. You must provide both a compiled `*_edgetpu.tflite` model and its matching
+labels file.
 
-Validated model: `ssdlite_mobiledet_coco_qat_postprocess_edgetpu.tflite` from coral.ai's model zoo,
-which is pre-compiled and needs no toolchain at all. 320×320, COCO-90, four output tensors.
+The runtime selects its postprocessor automatically from the model's output tensor signature:
+- **YOLOv9 DFL head (`yolo/dfl`)** — three int8 output tensors (`[1, anchors, 64]` DFL boxes,
+  `[1, anchors, classes]` logits, `[1, anchors, 1]` max). Used by the 17-class EdgeTPU YOLOv9-s
+  models (`yolov9-s-relu6-tpumax_{320,512}_int8_edgetpu.tflite` with `labels-coco17.txt`, as configured
+  in `deploy/examples/docker-compose.intel-coral.yml`).
+- **SSD postprocess head (`ssd/detection-postprocess`)** — four float output tensors, paired with
+  90-entry `coco_labels.txt`. Validated Coral model-zoo pick:
+  `ssdlite_mobiledet_coco_qat_postprocess_edgetpu.tflite` (320×320); `efficientdet_lite*_edgetpu.tflite`
+  uses the same head (benchmarked for comparison below).
+- **YOLO end-to-end head (`yolo/end-to-end`)** — single `[1, N, 6]` output tensor.
 
-The backend picks its decode from the model's output signature rather than from configuration — four
-tensors is the SSD detection-postprocess head, one `[1, N, 6]` tensor is the YOLO end-to-end head — and
-refuses loudly on anything else, because a four-tensor head read as one decodes into plausible nonsense.
+Any unrecognized output signature fails fast at startup rather than decoding invalid boxes.
 
 ### Three things about the SSD head that are counter-intuitive
 
@@ -340,22 +349,21 @@ downstream can detect it.
 The factory warns for any configured class the labels file cannot provide, which is the signal that
 turns this from silent into obvious.
 
-### YOLOv9 on EdgeTPU: built, and running the raw detect head
+### YOLOv9 on EdgeTPU (`yolo/dfl` head)
 
-**The export toolchain was the blocker, never the device.** Eight attempts at exporting one ourselves
-failed — ending at `onnx2tf` unable to transpose ultralytics' Conv weights — and that was read for a
-while as YOLO being impossible here. It is not: pre-compiled YOLOv9-s EdgeTPU weights are published
-freely by [dbro/frigate-detector-edgetpu-yolo9](https://github.com/dbro/frigate-detector-edgetpu-yolo9),
-and Frigate+ sells an `edgetpu` variant of its own `yolov9` type. Serval decodes them.
+Pre-compiled YOLOv9-s EdgeTPU weights are published by
+[dbro/frigate-detector-edgetpu-yolo9](https://github.com/dbro/frigate-detector-edgetpu-yolo9) (and
+Frigate+ offers a commercial `edgetpu` variant of its `yolov9` architecture).
 
-Two export facts from those attempts are still worth keeping, for anyone compiling their own:
+Two export constraints apply if you compile your own YOLO weights for EdgeTPU:
 
 - **Ultralytics' `int8=True` does not produce an EdgeTPU-usable model** on current versions — it routes
   through `litert_torch` and emits `[1, 3, 384, 640]` float32 **NCHW**. EdgeTPU needs NHWC with integer
   boundaries, so quantising only the weights is not enough.
 - **Modern ONNX tooling and TF 2.16 cannot share an environment**: `onnx >= 1.18` and `onnxscript` want
-  `ml_dtypes >= 0.5`, TF 2.16.2 pins `0.3.x`. The export has to be split into two containers with the
-  `.onnx` handed over on disk.
+  `ml_dtypes >= 0.5`, while TF 2.16.2 pins `0.3.x` (`onnx2tf` also fails to transpose standard
+  Ultralytics Conv weights without graph surgery). Exporting requires splitting ONNX export and TFLite
+  conversion across two containers.
 
 #### What the head emits, and why the host has to finish it
 
@@ -380,13 +388,13 @@ The third tensor is deliberately unread: it exists so a decoder can find interes
 dequantising, which is worth a lot when the decoder owns dequantisation. Serval's backend dequantises
 every output before the head sees it, so it buys nothing here.
 
-That is also this path's one known inefficiency, and it is smaller than it sounds. The backend converts
-every output tensor before the head runs — 441k values at 512 — to use roughly 640 of them, about ten
-surviving anchors of 64 bins, plus a whole tensor converted and never read. Removing the waste means
-letting a head see quantised tensors, which cuts across the seam that keeps postprocessors pure float
-and testable with no hardware. A subtract and a multiply per element is a fraction of a millisecond
-against tens for the inference itself, so **measure before trading that away** — an earlier reading of
-this page asserted it was the bottleneck on latency figures that could not support the claim.
+That is also this path's one known trade-off: the backend converts every output tensor to `float`
+before the postprocessor runs (~441k values at 512×512) even though only ~10 surviving anchors (~640
+values) are needed after thresholding, and the third tensor goes unread. Filtering on quantised `int8`
+scores first would require exposing quantised tensors to postprocessors, cutting across the float
+abstraction that keeps postprocessors hardware-independent and unit-testable. Because elementwise
+subtract-and-multiply takes a fraction of a millisecond compared to tens of milliseconds of TPU
+inference, the float boundary is kept as-is.
 
 #### The labels file is 17 lines, not 90
 
@@ -470,18 +478,9 @@ for the next model measured this way:
 - **Input size and anchor count scale together.** 320 → 512 multiplies canvas area by 2.56 and anchor
   count by 2.56, so two such points cannot separate image preparation from decoding.
 
-Use the `Detection budget` line to compare models. Use `--detect` to compare *what they find*.
-
-The figure that means something is `InferenceBudget`'s, reported in the *Detection budget* line at
-startup: it times the prepared-buffer path at the backend's own concurrency, on blank frames, which is
-what the scheduler spends.
-
-**One real inefficiency, of unknown but probably small size.** The backend dequantises every output
-before the head runs — 441k values at 512 — to use about 640 of them, roughly ten surviving anchors of
-64 bins, plus a third tensor converted and never read. The reference implementation filters on quantised
-scores first. Fixing it means letting a head see quantised tensors, which cuts across the seam that
-keeps postprocessors pure float and testable with no hardware. A subtract and a multiply per element is
-a fraction of a millisecond against tens for the inference, so measure before trading that away.
+Use the `Detection budget` line to compare models (`InferenceBudget` times the prepared-buffer path at
+the backend's concurrency on blank frames, matching what the scheduler spends). Use `--detect` to
+compare *what they find*.
 
 ## Input shape, and what tiling is for
 

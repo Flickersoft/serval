@@ -1,16 +1,14 @@
 # Deployment examples
 
-Two real, tested deployment shapes and one optional override. Neither deployment is the
-recommended starting point — that is [../compose.yaml](../compose.yaml) — but both show what a
-tuned deployment looks like on specific hardware, and their comments carry the measurements behind
-every number.
+Two tested hardware configurations and one optional integration override. For a standard install,
+start from [../compose.yaml](../compose.yaml); these files show how to adapt it for specific GPU,
+Coral Edge TPU, or ZFS setups.
 
-| File | Host it was written against | What it demonstrates |
+| File | Target host | What it configures |
 |---|---|---|
-| [compose.google-home.yaml](compose.google-home.yaml) | Any — an override for `../compose.yaml` | Cameras in Google Home and the Cast button. Needs public HTTPS; read [Docs/google-home.md](../../Docs/google-home.md) first |
-| [docker-compose.amd-gpu.yml](docker-compose.amd-gpu.yml) | TrueNAS SCALE box with an AMD APU (Vega iGPU) | TrueNAS Apps deployment (no `build:`, `pull_policy: always`), bind mounts on ZFS datasets, VAAPI encode + optional Vulkan vision offload on one device, full server-side AI on |
-| [docker-compose.intel-coral.yml](docker-compose.intel-coral.yml) | Intel N100 (4 cores) with two USB Coral Edge TPUs | Coral USB passthrough done right (`/dev/bus/usb` + the `device_cgroup_rules` line every guide omits), detection on the TPUs, tiled regions, thread budgets for a 4-core host, Intel GPU stats via `CAP_PERFMON` |
+| [compose.google-home.yaml](compose.google-home.yaml) | Any — Compose override for `../compose.yaml` | Google Home integration and Chromecast receiver. Requires public HTTPS; see [Docs/google-home.md](../../Docs/google-home.md) |
+| [docker-compose.amd-gpu.yml](docker-compose.amd-gpu.yml) | TrueNAS SCALE host with an AMD APU (Vega iGPU) | Pre-built GHCR image (`pull_policy: always`), ZFS dataset bind mounts, VAAPI transcoding + Vulkan vision offload on `/dev/dri`, full server-side AI enabled |
+| [docker-compose.intel-coral.yml](docker-compose.intel-coral.yml) | Intel N100 (4 cores) with two USB Coral Edge TPUs | Coral USB passthrough (`/dev/bus/usb` with `device_cgroup_rules` so USB re-enumeration works after firmware upload), Edge TPU detection, tiled regions, thread limits for 4 cores, Intel iGPU stats via `CAP_PERFMON` |
 
-Values marked `HOST-SPECIFIC` — mount paths, LAN addresses, secrets, retention — are one
-machine's choices and must be replaced, not copied. Everything else is a measured default worth
-keeping unless your hardware disagrees.
+Values marked `HOST-SPECIFIC` (mount paths, LAN IP addresses, secrets, retention days) must be
+updated for your machine before running.

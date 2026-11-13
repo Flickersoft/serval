@@ -4,8 +4,8 @@ Serval is a self-hosted security-camera system with on-device AI, owned by Flick
 Contributions are welcome — bug reports, documentation, and code.
 
 Read [the README](README.md) first for what the system is and how the pieces fit. The
-[What's missing](README.md#whats-missing) section is the honest list of what does not work yet,
-and it is the best place to find something worth doing.
+[Known limitations](README.md#known-limitations) section lists what is not built yet and is a
+good place to find something to work on.
 
 Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
