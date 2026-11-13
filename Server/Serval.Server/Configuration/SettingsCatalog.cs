@@ -341,7 +341,7 @@ public static class SettingsCatalog
         new("Serval:WebRtc:Enabled", GroupLive, "Low-latency live view",
             "Serves the focused single-camera view over WebRTC through the go2rtc sidecar, which is "
             + "what makes pan/tilt and talk-back feel immediate. Recording is unaffected either way "
-            + "— turning this off just means the focused view falls back to the recording stream.",
+            + "— turning this off just means the focused view falls back to the ~1 fps snapshot.",
             SettingKind.Bool),
 
         new("Serval:WebRtc:Go2RtcUrl", GroupLive, "go2rtc address",

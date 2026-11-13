@@ -23,8 +23,7 @@ You need all three:
   have to be able to reach each other: one on a guest VLAN, or at somebody else's house, will not
   connect.
 - **Live view switched on**, since that is what actually serves the picture. It is on by default.
-
-A Google account, and about twenty minutes.
+- **A Google account** (for creating a personal test project in the Google Home Developer Console).
 
 ## What leaves your network
 
@@ -181,8 +180,10 @@ reaches it over your own network, not through your proxy.
    [the key from Google](#the-key-from-google) for what it does and does not buy.
 
 9. **Link it.** Google Home app → *Add* → *Works with Google* → find your project, listed as
-   *[test] «your project name»*. The webview will flash past without asking you to sign in or to
-   approve anything — that is expected. Your cameras should appear.
+   *[test] «your project name»*. The OAuth webview completes immediately without showing a separate
+   login form — because this is a single-account personal integration, Serval authenticates the
+   linking request directly against the `ClientId` and `ClientSecret` you generated in step 2. Your
+   cameras should then appear.
 
    Back on *Settings → Server status*, the card should now read **Active** and name the account,
    with *Google last called* showing a time. That is the whole flow done. If it still says *Ready
@@ -238,7 +239,7 @@ What plays depends on what is on screen when you press it:
   hours of it, so a click anywhere on the bar is a jump in what is already playing rather than a
   fresh cast — and *Live* switches the television back to the live camera.
 
-It costs a **one-time $5 Google Cast developer fee** and about ten minutes:
+Registration requires a **one-time \$5 Google Cast developer fee**:
 
 1. Sign up at the [Google Cast SDK Developer Console](https://cast.google.com/publish) and pay the
    one-time fee.

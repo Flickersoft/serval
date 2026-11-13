@@ -1,13 +1,13 @@
 # Serval.Server
 
-The back end for Serval: a lightweight NVR plus AI-telemetry hub. It pulls camera streams and
-records them to disk in chunks, ingests the AI telemetry the CameraModule produces, and serves
-both — live and historical — to the App. Metadata lives in MongoDB; the video itself stays on
-the filesystem.
+The NVR and AI back end for Serval. It pulls RTSP camera streams and records them to disk as HLS
+fMP4 segments, runs server-side AI detection for standard IP cameras (or ingests AI telemetry from
+an optional [`Serval.CameraModule`](../../CameraModule/Serval.CameraModule/README.md) edge worker),
+and serves live streams, historical footage, and AI events to the
+[Flutter web/desktop UI (`serval_app`)](../../App/serval_app/README.md). Metadata lives in MongoDB;
+video segments stay on the filesystem.
 
-## What it does
-
-Everything below works today.
+## Capabilities
 
 | Capability | How |
 |---|---|
@@ -52,9 +52,9 @@ WebRTC — nothing is written, so it has no playback, no timeline and no clip ex
 rather than leaving the missing footage to be discovered.
 
 **`"recording": false` is the temporary version of that.** It stops the recorder without touching
-the `record` role — the switch is on the App's *Keeping footage* page. It defaults to `true` and
-may not be `true` with no `record` stream. Footage already on disk stays playable and still
-expires under `retentionDays`.
+the `record` role — the switch is in the *Recording* section of *Settings → Cameras*. It defaults
+to `true` and may not be `true` with no `record` stream. Footage already on disk stays playable and
+still expires under `retentionDays`.
 
 ```json
 {
@@ -157,11 +157,11 @@ nothing set, environment variables carry the deployment's choices, and a single 
 `appsettings.json` carries logging and nothing else — a default restated there would report itself
 to the settings page as this deployment's choice, and would be a second home free to drift from the
 first. `Configuration/BuiltInDefaults.cs` is how the settings page reads a value that exists only as
-a property initialiser. The overlay is a real
-`IConfigurationProvider` (`Configuration/SettingsConfigurationProvider.cs`), added last, so the
-option classes and the binder are untouched and only which value wins is different. A write reloads
-it in-process — there is no change stream and nothing to poll — and every service reads through
-`IOptionsMonitor`, so a change is in use within a few seconds without a restart.
+a property initialiser. The overlay is an `IConfigurationProvider`
+(`Configuration/SettingsConfigurationProvider.cs`), added last, so the option classes and the
+binder are untouched and only precedence changes. A write reloads the provider in-process, and
+every service reads through `IOptionsMonitor`, so changes take effect within a few seconds without
+a restart.
 
 Not everything can be: model paths, thread counts and the `Enabled` switches that decide whether a
 model is loaded at all are read while the process is composed, so those are stored, reported and
@@ -203,12 +203,13 @@ session — from being readable on the wire.
 
 ## Known issues
 
-- **`Microsoft.OpenApi` is pinned, not inherited.** `Microsoft.AspNetCore.OpenApi` drags in 2.0.0
-  transitively, which carries NU1903 (high). Since the document endpoint is served in Production,
-  the csproj pins 2.11.0 (fixed in 2.7.5). **Re-check on any `Microsoft.AspNetCore.OpenApi` bump**:
-  the pin can go once that package references a patched version itself.
-`dotnet list Serval.slnx package --vulnerable --include-transitive` is the check, and it reports
-nothing today.
+- **`Microsoft.OpenApi` is pinned to the `2.x` line (`2.13.0`).** `Microsoft.AspNetCore.OpenApi`
+  (`10.0.x`) constrains `Microsoft.OpenApi` to `[2.7.5, 3.0.0)` because its XML comment source
+  generator is incompatible with `Microsoft.OpenApi` `3.x` (`CS0200` on `IOpenApiMediaType.Example`).
+  The explicit `PackageReference` takes the latest `2.x` patch rather than the `[2.7.5` floor;
+  upgrading to `3.x` awaits an ASP.NET major built against it.
+  `dotnet list Serval.slnx package --vulnerable --include-transitive` checks for advisories across
+  the solution.
 
 ## Not done yet
 
@@ -217,10 +218,13 @@ nothing today.
   what sits in MongoDB is the plaintext, and the shipped Mongo has no authentication of its own.
   Anything with database access, or with an Admin token, reads them. Encrypting at rest needs a key
   the server can reach at boot, which is a different problem from this one.
-- **WebRTC beyond the LAN.** The signaling proxy works anywhere, but the media path needs a
-  STUN+TURN server to traverse NAT from outside the LAN. Only LAN (host-candidate) is wired now.
-- **Model distribution for server-side AI.** The dev compose file does not yet mount the model
-  directory as a volume, so it wants the ~2.5 GB baking into the image. The quickstart and example stacks mount it.
+- **WebRTC TURN relay.** Remote WebRTC works over a VPN or by forwarding UDP/TCP port `8666`
+  (`go2rtc` and `SdpCandidates` advertise the server's reachable address), but STUN/TURN relay in
+  the App (needed behind CGNAT or on client networks blocking port `8666`) is not wired yet.
+- **Model distribution for server-side AI.** The local development compose file
+  ([`Server/docker-compose.yml`](../docker-compose.yml)) does not mount a shared model volume yet,
+  whereas [`deploy/compose.yaml`](../../deploy/compose.yaml) and [`deploy/examples/`](../../deploy/examples/README.md)
+  mount a persistent `models` volume at `/app/models`.
 - **Server-side vision scaling.** One model instance is shared across every camera, drained
   round-robin — right as a default, but many busy cameras will want a GPU backend or a per-camera
   description budget.

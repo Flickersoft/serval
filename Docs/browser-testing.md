@@ -6,9 +6,9 @@ once you are there.
 
 ## Standing up a Server and a bundle
 
-Put a Server and a web bundle up together on a throwaway database — never at the live NVR, which
-has one real camera and a registry with no undo. You will be signing in as an Admin, so nothing
-about being logged in narrows what a stray click can reach:
+Run the Server and web bundle together against a temporary MongoDB database and media directory —
+never against a production NVR, since camera registry edits have no undo and PTZ commands move
+physical cameras. Signing in as an Admin grants full write access to every route:
 
 ```bash
 cd App/serval_app && flutter build web --release
@@ -45,10 +45,10 @@ The wall stays empty on a fresh database. A camera to fill it is a file-source o
 
 ### When the thing you are checking is not the Server
 
-A UI behaviour — a panel opening, a field selecting, a control landing where the design puts it —
-needs none of the above. `ServalApp`'s default constructor is the sample repository with no auth
-gate, which is what the goldens render, so a throwaway entrypoint gets the whole app in a browser
-on the design's own content with no Mongo, no Server and no login:
+UI-only checks (panel layout, text selection, responsive breakpoints) do not require a running
+Server or MongoDB. `ServalApp`'s default constructor uses `SampleServalRepository` with no login
+gate (the same fixture data used by golden tests), so a temporary entrypoint can launch the UI
+standalone in a browser:
 
 ```dart
 // lib/zz_sample_entry.dart — delete it afterwards

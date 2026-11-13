@@ -22,7 +22,8 @@ While the major is `0`:
 - **minor** — `v0.3.0` — a new capability, or anything that changes settings, schema, or behaviour
   that somebody has already set up.
 
-Strangers run this now. A settings or schema break takes the minor bump and says so in the notes.
+Any breaking change to settings, API payloads, or stored schemas requires at least a minor version
+bump and an explicit note in the release description.
 
 ## 3. Pick the release candidate and freeze it
 
@@ -138,12 +139,12 @@ gh release create v0.2.1 /tmp/compose.yaml --repo Flickersoft/serval --generate-
 now that everything lands through one. `--verify-tag` fails on a typo instead of silently creating a
 release at a tag that does not exist.
 
-**`compose.yaml` is the install.** The README's quickstart fetches
-`releases/latest/download/compose.yaml`, so a release without it breaks every new install until the
-next one — and it is taken from the tag, not from a working tree, so the file and the image it
-defaults to (`:latest`, which this tag just moved) describe the same release. Releases that are not
-server releases — the detector model's, see below — are published as prereleases with
-`--latest=false`, so they never become the one that URL resolves to.
+**Always attach `compose.yaml` to server releases.** The root README's quickstart downloads
+`releases/latest/download/compose.yaml`, so omitting that asset breaks that URL until the next
+release. Extract `compose.yaml` from the tagged commit rather than a local working tree so the
+attached file and `:latest` image match. Non-server releases (such as detector weight releases; see
+below) must be published with `--latest=false` so `releases/latest` continues pointing at the server
+release.
 
 ### The bundled object detector
 

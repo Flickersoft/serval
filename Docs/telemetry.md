@@ -53,11 +53,9 @@ ride on. `motion_score` is recorded so a threshold can be judged after the fact,
 and `frame_count` above 1 means the model was shown consecutive frames and could describe movement
 rather than a still.
 
-**A scene is an instant, not a span.** Even a multi-frame description covers the couple of seconds
-its frames were taken across; nothing here describes a minute. That is why a saved clip's *What's in
-it* is a separate vision pass over the finished file rather than a scene picked out of the window —
-see [clips.md](clips.md#whats-in-it). A scene relabelled as a summary would be one frame's reading
-presented as the arc of the clip.
+**A scene is an instant, not a span.** Even a multi-frame description covers only the couple of
+seconds its frames span. Saved clip summaries instead run a dedicated multi-frame vision pass across
+the finished clip file — see [clips.md](clips.md#automatic-clip-summaries).
 
 ```json
 {
@@ -88,10 +86,9 @@ consumer can fetch that exact snapshot. `frame_count` counts the frames it was a
 frames it was only predicted to be present on do not count, so `frame_count` against the episode's
 duration is how you tell a solid sighting from an intermittent one.
 
-An episode is one **object** and not one class. Three people in shot is three records, each with its
-own `id`, its own start, its own duration and its own path, because the Server's tracker tells them
-apart across frames. A consumer can say "this person has been at the door for four minutes", which
-the class-shaped record it replaces could not express.
+An episode tracks one **object instance**, not an entire class. Three people in shot produce three
+records, each with its own `id`, start time, duration, and path, tracked across frames by the
+Server's `ObjectTracker`.
 
 ```json
 {

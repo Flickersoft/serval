@@ -16,7 +16,7 @@ flowchart LR
     subgraph SRV["Server (ASP.NET + go2rtc sidecar)"]
         direction TB
         API["HTTP + WebSocket API"]
-        FF["ffmpeg / camera<br/>transcode → unified codec (HLS fMP4, video+audio)"]
+        FF["ffmpeg / camera<br/>stream-copy (or transcode) → HLS fMP4 (video+audio)"]
         AI["AI detection — server-side<br/>objects · scenes · audio"]
         G2["go2rtc<br/>WebRTC"]
         META[("MongoDB<br/>cameras · telemetry · index")]
@@ -45,7 +45,8 @@ flowchart LR
 ## Two kinds of camera
 
 There are **two kinds of camera**, and every camera's video converges on the Server's **ffmpeg**,
-which normalizes it to one codec — the single decode path the whole front end relies on:
+which muxes supported codecs (`h264`, `hevc`, `av1`, `vp9`) directly into HLS fMP4 segments without
+re-encoding unless per-stream transcoding is configured (see [recording.md](recording.md)):
 
 - **IP camera (no module):** the Server pulls the camera's **RTSP** directly. Recording, live,
   dashboard, WebRTC and **AI** all run off it. The AI is the *same detection library* the edge
@@ -86,9 +87,13 @@ relay is the one unbuilt piece; its shape and its cost are in the
 
 ## Streams and roles
 
-The role table and its JSON examples are in the
-[Server README](../Server/Serval.Server/README.md#streams-and-roles). What follows is why it works
-that way.
+Each camera defines one or more named stream URLs with explicit **roles**:
+- `record` (optional, at most one) — archived to disk as HLS fMP4 segments for timeline replay and clip export.
+- `detect` (required, exactly one) — decoded for ~1 fps dashboard snapshots, object/motion detection, scene descriptions, and AI audio.
+- `live` (required, exactly one) — registered with `go2rtc` for on-demand WebRTC live viewing and talk-back.
+
+Full schema and JSON examples are in the [Server README](../Server/Serval.Server/README.md#streams-and-roles).
+What follows is why the model is structured this way.
 
 **Every role is written out, and nothing is inferred.** Letting `detect` and `live` fall back to the
 `record` stream would save a line of JSON and cost far more than it saved: the resolved streams are
@@ -148,11 +153,11 @@ allow only two will then refuse the WebRTC viewer. If you hit that: turn `Record
 recording session then carries video and the AI session audio, one track each), disable
 server-side AI for that camera, or accept that the focused live view is unavailable.
 
-Two shapes that look like fixes and aren't. Teeing AI audio off the recording ffmpeg as a second
-pipe means a stalled reader backpressures the muxer and takes recording down with it — see
-`FfmpegAudioSession`. And fronting ingest with go2rtc makes the sidecar a single point of failure
-for recording while forcing it out of lazy mode, so the camera session you save is spent keeping
-go2rtc permanently connected.
+Two alternative designs were avoided deliberately. Teeing AI audio off the recording `ffmpeg` as a
+second pipe means a stalled reader backpressures the muxer and stalls recording along with it — see
+[`FfmpegAudioSession`](../Server/Serval.Server/Ai/FfmpegAudioSession.cs). And fronting ingest with
+`go2rtc` makes the sidecar a single point of failure for recording while forcing it out of lazy
+mode, so the camera session saved is spent keeping `go2rtc` permanently connected.
 
 ## Inside the CameraModule
 

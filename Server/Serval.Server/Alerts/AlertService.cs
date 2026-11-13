@@ -140,7 +140,7 @@ public sealed class AlertService
                 // the same frame clock — FfmpegSnapshotSession hands one session anchor to
                 // SnapshotWatcher and DetectFrameReader alike — so the difference is real rather
                 // than two clocks disagreeing. It should be about a second, since snapshots are
-                // published at Ingest:SnapshotFps while detection runs at Detection:DetectFps; a
+                // published at Ingest:SnapshotFps while detection runs at Ingest:DetectFps; a
                 // consistently larger number is the thing to chase before anything else here.
                 _logger.LogDebug(
                     "Alert {AlertId} on camera {CameraId}: its stand-in poster is {Age:0.##}s "

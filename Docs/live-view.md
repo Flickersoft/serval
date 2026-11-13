@@ -32,9 +32,9 @@ How it fits together:
   address the browser used to reach the server**, on `Serval:WebRtc:CandidatePort` (8666; 0 turns
   it off). That address is by construction one the browser can reach this host at, so a LAN needs
   nothing configured (`SdpCandidates`). `SERVAL_WEBRTC_CANDIDATES` — go2rtc's own
-  `webrtc.candidates` — adds addresses on top, for a port-forwarded public IP. **Reaching it from
-  outside the LAN in general needs a STUN+TURN server** (go2rtc supports an external TURN); that's
-  not set up here.
+  `webrtc.candidates` — adds addresses on top, for a port-forwarded public IP. Forwarding UDP/TCP
+  port `8666` (or using a VPN) lets viewers connect from outside the LAN; **deployments behind
+  CGNAT or client networks blocking `8666` need a TURN server**, which is not wired in the App yet.
 - **It follows the `live` role, and nothing else.** A camera with no `record` role keeps nothing and
   still has a full WebRTC view — go2rtc pulls the camera itself and never reads the archive, so
   live view and recording are independent choices. The reverse also holds: a camera whose `live`
@@ -77,14 +77,12 @@ leave a hole in the activity column.
 
 ### Connecting is not offline
 
-Camera status is derived entirely from snapshot staleness on `WS /api/dashboard` — the Server
-publishes no status field — and the failure that follows from reading staleness alone is that a
-resumed PWA has *every* camera stale at once. The wall painted all six `"<name> is offline"` for the
-second or two the reconnect took: a claim about six cameras made on the strength of one socket
-nobody had told it went away.
+Camera status on the wall is derived from snapshot staleness on `WS /api/dashboard` (the Server
+publishes no separate camera-health field). Measuring staleness alone would mark every camera
+`"offline"` for the second or two a backgrounded PWA takes to reconnect its WebSocket.
 
-So `Camera.connection` is a three-way `CameraConnection` and **`offline` is a failure state** —
-we listened, and heard nothing. `LiveServalRepository._frameStateOf` decides:
+To distinguish a reconnecting client from a dead camera, `Camera.connection` uses a three-state
+`CameraConnection` decided by `LiveServalRepository._frameStateOf`:
 
 | | |
 |---|---|
@@ -117,18 +115,14 @@ behaving:
   so the window *closing* moves the digest and wakes the sweep. Without that the wall would read
   "connecting" until something unrelated happened to rebuild it.
 
-### The focused view recovers too
+### Focused WebRTC recovery
 
-`WebRtcSession` previously reacted only to `RTCPeerConnectionStateFailed`. `Disconnected` — what a
-backgrounded phone's session lands in — was ignored, so on resume the view sat in `WebRtcStage.live`
-showing a frozen picture with no sign anything was wrong, which is a worse lie than the wall's
-flash. And there was no retry from `failed` at all.
-
-Now: `disconnected` starts a 5s settle timer (WebRTC recovers from it routinely — a Wi-Fi handover,
-a moment of congestion — and swapping the picture out on every one of those would be worse than the
-freeze), and if it has not recovered the stage drops to `connecting` and `WebRtcView._restart()`
-builds a new session. `failed` and `closed` are terminal for a peer connection, so they restart
-too; go2rtc's signalling is one request/response and there is nowhere to renegotiate to.
+`WebRtcSession` handles `disconnected` differently from `failed` and `closed`: `disconnected` starts
+a 5s settle timer (since brief Wi-Fi handovers or congestion often recover on their own without
+tearing down the view), and if the peer connection has not recovered after 5s, the stage drops to
+`connecting` and `WebRtcView._restart()` opens a new session. `failed` and `closed` are terminal for
+a peer connection and trigger `_restart()` immediately (`go2rtc` signaling is single
+offer/answer with no ICE renegotiation endpoint).
 
 Restarts are budgeted at three, widening 2s → 4s → 8s, reset only by a session actually reaching
 `live`. Signalling is a `POST /api/cameras/{id}/webrtc` per attempt, so a camera that is genuinely
@@ -175,12 +169,13 @@ saves egress and the client's own decode and nothing else. Gating the encode on 
 watching means reaching back into `StreamIngestManager` and `RecordArguments` and contending with
 those two non-UI consumers — a separate and much larger job.
 
-The frames are the other half, and are why this is in `frame_watchdog.dart`'s orbit as much as this
-one's. Every arrival writes a notifier, which rebuilds a tile, which asks for an animation frame that
-a hidden page is never given — so an open wall socket guarantees there is a frame outstanding at the
-moment the page goes away, which is the state that file describes as unrecoverable from the inside.
-It is a reduction rather than a cure: `WS /api/events` still writes the feed, so a busy site can
-still schedule a frame while hidden.
+Pausing incoming frames also avoids triggering the CanvasKit hidden-tab `requestAnimationFrame` stall
+that [`lib/platform/frame_watchdog.dart`](../App/serval_app/lib/platform/frame_watchdog.dart)
+recovers from (see [browser-testing.md](browser-testing.md)). Every arriving snapshot updates a
+`ValueNotifier`, rebuilding a tile and scheduling a `requestAnimationFrame` callback that a hidden
+browser tab never delivers — leaving a pending frame latch when the tab backgrounds. Pausing the
+dashboard socket reduces that exposure (`WS /api/events` still updates the activity feed, so busy
+sites can still schedule frames while hidden).
 
 **The events socket is never paused.** `WS /api/events` is the alerting path — an alert that arrived
 while a phone was in a pocket is the most important thing this App carries — and it is nearly free, a
@@ -219,12 +214,11 @@ against go2rtc:
 - A trackless `sendrecv` transceiver still writes `a=ssrc` and `a=msid` into the offer, provided it
   is declared against a stream (`createLocalMediaStream`); declared without one it writes `a=msid:-`
   instead. So the offer's shape does not change when the track is deferred.
-- **No RTP flows on that SSRC until the first press.** This is the real behavioural change: a
-  disabled track still transmits, so the old always-attached microphone meant go2rtc saw a
-  continuous silent stream from the moment the connection came up, and now it sees nothing until
-  someone speaks. If talk-back stops reaching the camera at all, suspect this first: go2rtc would
-  have to be deciding there is a backchannel to wire up from the offer's media direction rather
-  than from the first packet to arrive.
+- **No RTP flows on that SSRC until the first press.** Unlike an attached-but-disabled media track
+  (which transmits silent RTP packets continuously from connection start), a trackless transceiver
+  sends zero RTP packets until `replaceTrack` runs on the first press. If a future `go2rtc` version
+  stops wiring the camera backchannel, check whether it requires initial RTP packets rather than
+  reading media direction from the SDP offer alone.
 
 It's **opt-in per camera** via `twoWayAudio`, and for a good reason: go2rtc probes the backchannel
 by default, and that probe *breaks* some cameras (certain doorbells drop the whole stream). So the
@@ -303,10 +297,9 @@ The App shows a percentage of travel for the first two and **no figure at all** 
 because dead reckoning is a count of our own commands: it starts wrong the moment anything else
 touches the camera and there is no way to notice.
 
-**There is still no zoom factor, and there cannot be.** The generic zoom space is a fraction of the
-lens's travel; nothing in ONVIF publishes the optical range that would turn 0.42 into `2.4×`, and
-the curve between the two is vendor-specific and nonlinear. The `2.4×` the design drew is not
-merely unsourced — it is not derivable.
+**Optical zoom factor (`2.4×`) is not available via ONVIF.** ONVIF's generic zoom space reports a
+0..1 fraction of lens travel rather than an optical focal-length multiplier, and the mapping curve
+between travel and magnification is vendor-specific and nonlinear.
 
 ### The SOAP layer
 

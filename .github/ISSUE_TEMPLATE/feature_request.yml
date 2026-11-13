@@ -72,8 +72,8 @@ body:
         - label: I searched the existing issues for this.
           required: true
         - label: >-
-            I read [What's missing](https://github.com/Flickersoft/serval#whats-missing) — the
-            honest list of what does not work yet.
+            I read [Known limitations](https://github.com/Flickersoft/serval#known-limitations) for
+            features and limitations already tracked.
           required: true
         - label: >-
             If I implement this, I understand a first pull request needs the

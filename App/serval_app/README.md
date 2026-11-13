@@ -1,42 +1,45 @@
 # Serval — app
 
-The Flutter front end, wired to the Server.
+The Flutter web and Linux desktop front end for Serval. The UI uses a custom dark theme and widget
+library called **Nocturne** ([`lib/theme/nocturne.dart`](lib/theme/nocturne.dart)).
 
-Three principal screens, all built from the **Security Camera Dashboard Redesign** design document
-(maintained outside this repository), which sits on the **Nocturne** design system:
+### Screens
 
-- **The wall** ([`lib/screens/wall_screen.dart`](lib/screens/wall_screen.dart)) — a 64px icon rail, a
-  tile grid where each camera keeps its own size and shape, and one "What's happening" column
-  carrying everything Serval sees and hears across every camera. The video is never covered.
-- **The single camera** ([`lib/screens/camera_screen.dart`](lib/screens/camera_screen.dart)) — what
-  you land on after clicking a tile. Push-to-talk, pan/tilt, zoom, a two-sided live transcript,
-  Serval's summary, and a timeline scrubber you can click or drag to replay the recording.
-- **Cameras & settings** ([`lib/screens/cameras_screen.dart`](lib/screens/cameras_screen.dart)) —
-  the registry, and the whole record of the camera you pick: name, place, streams
-  and what each is for, retention, the ONVIF connection, and which of Serval's senses are on.
+- **The wall** ([`lib/screens/wall_screen.dart`](lib/screens/wall_screen.dart)) — a 64px left
+  navigation rail, a tile grid where each camera keeps its native aspect ratio, and a *What's
+  happening* column showing detections, scene descriptions, sounds, and speech across all cameras
+  without covering the video.
+- **Single-camera view** ([`lib/screens/camera_screen.dart`](lib/screens/camera_screen.dart)) —
+  opened by clicking a camera tile. Provides WebRTC live video, push-to-talk, ONVIF pan/tilt/zoom,
+  a merged activity and transcript feed (including scene descriptions and clip summaries), and a
+  timeline scrubber for replaying recorded HLS footage.
+- **Alerts & Saved clips** ([`lib/screens/alerts_screen.dart`](lib/screens/alerts_screen.dart),
+  [`lib/screens/clips_screen.dart`](lib/screens/clips_screen.dart)) — filterable alert history and
+  exported clip library.
+- **Cameras** ([`lib/screens/cameras_screen.dart`](lib/screens/cameras_screen.dart)) — camera
+  registry and per-camera settings: name, location, stream URLs and roles, retention, ONVIF
+  connection, alert rules, and which AI features are enabled.
+- **Administration & auth** — **Sign-in** ([`lib/screens/login_screen.dart`](lib/screens/login_screen.dart)),
+  **AI models** ([`lib/screens/ai_models_screen.dart`](lib/screens/ai_models_screen.dart)),
+  **Notifications** ([`lib/screens/notifications_screen.dart`](lib/screens/notifications_screen.dart)),
+  **Users & access** ([`lib/screens/users_screen.dart`](lib/screens/users_screen.dart)),
+  **Server settings** ([`lib/screens/settings_screen.dart`](lib/screens/settings_screen.dart)), and
+  **Server status** ([`lib/screens/server_screen.dart`](lib/screens/server_screen.dart)).
 
-The split between the first two is deliberate: **talk-back and pan/tilt exist only on the
-single-camera view.** On the wall an alert offers *Open camera* instead, so you always speak from
-the feed you are actually watching.
+Talk-back and pan/tilt/zoom appear only on the single-camera view. On the wall, an alert offers
+*Open camera* instead, so audio and PTZ actions always happen while watching that feed.
 
-Four more screens sit outside the design doc: **sign-in**
-([`lib/screens/login_screen.dart`](lib/screens/login_screen.dart)), **Users & access**
-([`lib/screens/users_screen.dart`](lib/screens/users_screen.dart)), **Server settings**
-([`lib/screens/settings_screen.dart`](lib/screens/settings_screen.dart)) and **Server status**
-([`lib/screens/server_screen.dart`](lib/screens/server_screen.dart)).
-
-The last two are a pair, and the split is the point: *status* is what the Server is **doing** —
-processor, memory, GPU and disk from `GET /api/system/stats` — while *settings* is what it is
-**told** to do, from `GET /api/settings`. They were one page while vitals were the only server-wide
-thing to look at. The settings screen draws itself entirely from the catalogue the Server sends,
-including the sentence explaining each field, so a knob added on the Server appears here with no
-change to the app. See [Docs/configuration.md](../../Docs/configuration.md).
+*Server status* shows live host metrics (CPU, memory, GPU/Coral, and disk from
+`GET /api/system/stats`), while *Server settings* edits runtime configuration from
+`GET /api/settings`. The settings screen renders dynamically from the server's settings catalogue
+(including validation bounds and field descriptions), so new server settings appear automatically.
+See [Docs/configuration.md](../../Docs/configuration.md).
 
 ## What's behind each screen
 
-[`LiveServalRepository`](lib/data/live_repository.dart) talks to the Server; the screens
-were not rewritten to do it — they still read [`ServalRepository`](lib/data/serval_repository.dart)
-and nothing else, which is what the scaffold was shaped for.
+Screens read [`ServalRepository`](lib/data/serval_repository.dart); [`LiveServalRepository`](lib/data/live_repository.dart)
+implements that interface against the Server's HTTP and WebSocket endpoints, while widget tests use
+an in-memory sample repository.
 
 | Screen element | Server surface |
 |---|---|
@@ -91,12 +94,11 @@ Server with a non-empty `Serval:Cors:AllowedOrigins` cannot be told about in adv
 flutter test
 ```
 
-Hermetic — no Server, no network. The goldens render all three screens at the design's 1440x900
-with the real fonts, so drift from the mock fails the build; regenerate with
-`flutter test --update-goldens` and look at the PNGs in [`test/goldens/`](test/goldens/). The rest
-pin the parts that would otherwise fail silently against a real Server: the telemetry documents,
-the wall socket's binary frame format, the camera record's round trip, the role rules, and the
-three layers of replay arithmetic.
+Hermetic — no Server, no network. Golden tests render the primary screens at 1440×900 with the
+bundled fonts; regenerate baselines with `flutter test --update-goldens` and inspect the PNGs in
+[`test/goldens/`](test/goldens/). Unit and widget tests also cover telemetry parsing, the dashboard
+WebSocket binary frame format, camera record serialization, stream-role validation, and VOD replay
+window arithmetic.
 
 [`integration/`](integration/) sits outside `test/` so `flutter test` never picks it up, and runs
 against a real Server:
@@ -152,11 +154,10 @@ The screens read the repository and the session from Riverpod; `lib/widgets/` do
 what it needs as parameters. That boundary is deliberate and is described in
 [`providers.dart`](lib/data/providers.dart).
 
-Nocturne's rules, which the widgets follow: the accent is a line and a glow, never a flood; primary
-actions are a 1px accent outline on transparent, never a fill; no pure black and no pure white; on a
-dark ground elevation is a hairline edge plus ambient darkness, never stacked shadows. The form
-controls are hand-built to those rules rather than themed Material — a `Switch` is a filled track
-and a `Slider` thumb carries a ripple, both of which are the flood the system forbids.
+Nocturne styling conventions (`lib/theme/nocturne.dart`): surfaces use dark off-black backgrounds
+with 1px hairline borders rather than drop shadows; primary buttons use a 1px accent outline on a
+transparent background rather than solid fills; and form controls (`Switch`, `Slider`, inputs) are
+custom widgets built directly on those tokens rather than Material's filled/ripple defaults.
 
 Inter and JetBrains Mono are vendored in `assets/fonts/` rather than fetched at runtime, so an
 offline run still renders the design as specified. Inter 4.001 and JetBrains Mono 2.211, both under
@@ -167,10 +168,9 @@ travel with the source without being bundled into the build.
 
 ## Not done
 
-- **The design elements no endpoint can supply** — resolution badges, disk usage, alert severity,
-  object geometry, a still from a past instant. Each is rendered per the design, marked `// STUB:`
-  at the use site, and listed with its reason in
-  [Docs/app-notes.md](../../Docs/app-notes.md#what-still-has-no-backend-source).
+- **UI placeholders and omitted fields** — resolution badges, alert severity, detection bounding-box
+  overlays, and per-alert historical thumbnails are either omitted or marked `// STUB:` in code. See
+  [Docs/app-notes.md](../../Docs/app-notes.md#ui-placeholders-and-omitted-fields).
 
 ### Known defects
 
@@ -183,11 +183,7 @@ travel with the source without being bundled into the build.
   layout starts at `Serval.compactWidth` (950), so **the whole 950–1345 band is affected**, which is
   most of a laptop screen. The goldens render at 1440 and are clean, which is why nothing caught it.
 
-  It is a design question before it is a fix, and that is why it is written down rather than patched:
-  the row has no smaller form to fall back to. The `Wrap` around it was put there to drop the
-  ready-made replies onto a second line, and it cannot help here because the overflow is *inside* one
-  of its children rather than between them. The candidates are dropping the volume slider to the
-  compact layout's plain mute toggle under some width, letting the two labelled toggles go to glyphs,
-  or letting the row wrap into two lines — each of which changes what the design draws at that size.
-
-  Not caused by the pinch-to-zoom work: reproduced identically, to the pixel, at `ad34d74`.
+  The outer `Wrap` drops quick-reply chips onto a second line, which does not prevent overflow
+  *inside* the inner control row. Possible fixes include collapsing the volume slider to a mute
+  toggle below a threshold width, switching the two labelled toggles to icons, or allowing the
+  control row itself to wrap.

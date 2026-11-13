@@ -39,7 +39,7 @@ Actionable engineering checklist for the quick wins and medium-term items from t
 
 ### 5. Fix minor documentation drift
 - **Tasks:**
-  - [ ] [`CONTRIBUTING.md`](CONTRIBUTING.md#L7): Update `[What's missing](README.md#whats-missing)` to `[Status](README.md#status)`.
+  - [x] [`CONTRIBUTING.md`](CONTRIBUTING.md#L7): Update `[What's missing](README.md#whats-missing)` to `[Known limitations](README.md#known-limitations)`.
   - [ ] [`Server/Serval.Server/README.md`](Server/Serval.Server/README.md#L206-L209): Update the `Microsoft.OpenApi` note to reflect the current `2.12.2` pin and the `3.0` `CS0200` source-generator constraint documented in [`Serval.Server.csproj`](Server/Serval.Server/Serval.Server.csproj#L12-L21).
   - [ ] [`CameraModule/Serval.CameraModule/README.md`](CameraModule/Serval.CameraModule/README.md#L124-L128): Update or remove the `CVE-2025-6965` (`SQLitePCLRaw.lib.e_sqlite3`) known-issue bullet to match [`Serval.CameraModule.csproj`](CameraModule/Serval.CameraModule/Serval.CameraModule.csproj#L42-L49), where `2.1.13` is directly referenced and `Microsoft.Data.Sqlite` `10.0.12` already clears the advisory.
 

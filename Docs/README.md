@@ -1,31 +1,31 @@
 # Serval documentation
 
-The READMEs say what each part is and how to run it. These are the longer explanations behind
-them — kept here so a cross-project topic is written once rather than repeated per project.
+The component READMEs cover how to build and run each part of the repository. The documents below
+cover deployment, configuration, hardware acceleration, integrations, and internal architecture.
 
-**Deploying?** Read in this order: the [root README](../README.md) quickstart →
+**Deploying?** Read in this order: [root README](../README.md) quickstart →
 [deployment.md](deployment.md) (including [Enabling the AI](deployment.md#enabling-the-ai)) →
 [configuration.md](configuration.md) → [coral.md](coral.md) or [rk3588.md](rk3588.md) if you
-have that hardware → [google-home.md](google-home.md) if you want the cameras on a Nest Hub or a
-television and have a public HTTPS endpoint. Everything else below is the engineering detail behind the system.
+use that hardware → [google-home.md](google-home.md) or [mcp.md](mcp.md) if you want external
+integrations over a public HTTPS endpoint.
 
-| Document | What's in it |
+| Document | Contents |
 |---|---|
-| [architecture.md](architecture.md) | The two kinds of camera, how video and telemetry flow, why streams carry explicit roles, and the CameraModule's internal threading |
-| [detection.md](detection.md) | The shared AI library: the motion and sound gates, the tuning measurements behind their defaults, server-side AI, and the models |
-| [telemetry.md](telemetry.md) | The six record schemas, the two speaker streams, and the ingest contract |
-| [recording.md](recording.md) | Codec passthrough, why HLS and not DASH, audio in segments, clip export, and hardware transcoding |
-| [clips.md](clips.md) | Saved clips: why they live outside the camera directories, segment-exact ranges, the write job, and who may delete one |
-| [alerts.md](alerts.md) | The alert queue, the rolling detect-stream buffer its preview clips are cut from, and why an alert works on a camera nobody is recording |
-| [live-view.md](live-view.md) | WebRTC via go2rtc, two-way talk-back, and ONVIF PTZ |
-| [configuration.md](configuration.md) | The three configuration tiers, the list-binding trap, the environment-only keys, and the CameraModule's settings |
-| [deployment.md](deployment.md) | Docker, the quickstart compose, the deployment examples, GPU offload, and logs |
-| [memory.md](memory.md) | What a camera costs, why an Intel host accounts the vision model as shared memory, and what the 90% warning is actually measuring |
-| [rk3588.md](rk3588.md) | Orange Pi 5 deployment and NPU vision |
-| [coral.md](coral.md) | Server deployment with Coral Edge TPUs: object detection on an accelerator, bring-up, and the failure modes |
-| [google-home.md](google-home.md) | Putting the cameras on a Nest Hub or a television: what it needs first, what leaves your network, and what to expose |
-| [mcp.md](mcp.md) | Letting an AI assistant (Claude, Gemini, any MCP client) read the cameras: what leaves your network, what to expose, linking and revoking |
-| [releasing.md](releasing.md) | The seven steps from a merged pull request to a published release, and the two rules that keep it from going wrong |
-| [testing.md](testing.md) | The test suites, running without a camera, and the module's diagnostics |
-| [browser-testing.md](browser-testing.md) | Driving the real web build in a browser: Playwright against canvaskit, and what an insecure origin withholds |
-| [app-notes.md](app-notes.md) | Flutter client decisions, and which design elements have no endpoint behind them |
+| [architecture.md](architecture.md) | Camera ingestion modes, video and telemetry data flow, explicit stream roles (`record`, `detect`, `live`), and `CameraModule` threading |
+| [detection.md](detection.md) | Shared AI pipeline (`Serval.Ai`): motion and audio gates, adaptive cropping and tiling, tracking, alert rules, and model selection |
+| [telemetry.md](telemetry.md) | Telemetry HTTP ingest contract, the six record schemas, and live vs. diarized speaker streams |
+| [recording.md](recording.md) | Stream-copy HLS fMP4 recording, audio muxing, MP4 clip export, and hardware transcoding |
+| [clips.md](clips.md) | Saved clips storage layout, segment-exact export ranges, background write jobs, automatic clip summaries, and permissions |
+| [alerts.md](alerts.md) | Alert generation, rolling detect-stream preview buffer, alert filtering, and Web Push notifications |
+| [live-view.md](live-view.md) | Low-latency WebRTC via `go2rtc`, two-way talk-back, digital zoom, and ONVIF PTZ |
+| [configuration.md](configuration.md) | Configuration precedence tiers, array/list binding rules, environment-only keys, `CameraModule` settings, and JSON backup/restore |
+| [deployment.md](deployment.md) | Docker Compose setup, image tags, enabling AI models, secrets, TLS/reverse proxy exposure, GPU offload, and container logs |
+| [memory.md](memory.md) | Per-camera `ffmpeg` memory cost, Intel iGPU shared-memory (`shmem`) accounting, cgroup working-set metrics, and process leak checks |
+| [rk3588.md](rk3588.md) | `Serval.CameraModule` deployment on Orange Pi 5 (RK3588) and RKLLM NPU vision offload |
+| [coral.md](coral.md) | Object detection on USB Coral Edge TPUs (`tflite-edgetpu`), container device rules, YOLOv9/SSD model trade-offs, and troubleshooting |
+| [google-home.md](google-home.md) | Google Home cloud-to-cloud integration for Nest Hub displays and custom Cast receiver setup for televisions |
+| [mcp.md](mcp.md) | Read-only Model Context Protocol (`/mcp`) server, OAuth 2.1 linking, exposed endpoints, and available tools |
+| [releasing.md](releasing.md) | Release tagging workflow, CI image publishing, and `compose.yaml` release asset rules |
+| [testing.md](testing.md) | Unit/integration test suites, synthetic file cameras, and `Serval.CameraModule.Tools` CLI diagnostics |
+| [browser-testing.md](browser-testing.md) | End-to-end browser testing against Flutter CanvasKit with Playwright, plus HTTP vs. HTTPS origin behavior |
+| [app-notes.md](app-notes.md) | Flutter client (`serval_app`) architecture, routing, state management, aspect-ratio rules, and UI placeholders |
