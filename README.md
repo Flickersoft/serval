@@ -78,8 +78,9 @@ and vision-language scene descriptions.
 ## Quickstart
 
 You need an x86-64 host running Docker with Compose, and IP cameras that serve RTSP (or HTTP-FLV,
-RTMP, or SRT). Linux is what is tested, and is required for GPU and Coral Edge TPU acceleration —
-see [Hardware support](#hardware-support). Recording uses ~2 GB of RAM, and the full AI stack uses
+RTMP, or SRT). Linux is what is tested, and the only host where Intel/AMD GPU and Coral Edge TPU
+acceleration work out of the box; Windows and Mac hosts run on the CPU, apart from NVIDIA detection
+on Windows — see [Hardware support](#hardware-support). Recording uses ~2 GB of RAM, and the full AI stack uses
 8–10 GB ([Storage and sizing](#storage-and-sizing)).
 
 In an empty directory:
@@ -141,24 +142,59 @@ omit individual models), then enable them in Settings. Disk and CPU details are 
 | Component | Supported hardware |
 |---|---|
 | Server | x86-64 Linux (`linux/amd64` container image; see notes on other hosts below) |
-| Object detection | Any x86-64 CPU via ONNX Runtime (default), or **Coral USB Edge TPU** (runtime included in image; ~96 inferences/s on dual Corals vs ~10–13/s on an Intel N100 CPU) |
-| Video transcoding | VAAPI on Intel and AMD GPUs (drivers included; used only when per-stream transcoding is enabled) |
+| Object detection | Any x86-64 CPU via ONNX Runtime (default), **Coral USB Edge TPU** (runtime included in image; ~96 inferences/s on dual Corals vs ~10–13/s on an Intel N100 CPU), or **NVIDIA GPUs** via CUDA with the CUDA image variant (~560/s measured on an RTX 4080 SUPER) |
+| Video transcoding | VAAPI on Intel and AMD GPUs (drivers included; used only when per-stream transcoding is enabled); NVENC on NVIDIA with the CUDA variant |
 | Scene model | CPU, or GPU offload via Vulkan (Intel and AMD GPUs) |
 | Reference target | Designed for ~10 cameras on an Intel N100 mini-PC with USB Coral accelerators (measured with 7 cameras) |
 
 **Windows and Intel macOS (Docker Desktop).** Recording, playback, and CPU inference should run in
-Docker Desktop on x86-64 hosts (untested), but Docker Desktop's Linux VM cannot pass through PCIe
-GPUs (`/dev/dri` for VAAPI/Vulkan) or Coral USB devices (`/dev/bus/usb`). Host metrics under
-**Settings → Server status** will also reflect the Docker VM rather than the physical host, and
-recordings will write into Docker Desktop's virtual disk unless bind-mounted appropriately.
+Docker Desktop on x86-64 hosts (untested). Acceleration is limited by what Docker Desktop's Linux VM
+can reach:
+
+- **NVIDIA on Windows:** the WSL2 backend passes NVIDIA GPUs through to containers, so the CUDA
+  variant below should work there with a current NVIDIA Windows driver (untested).
+- **Intel and AMD GPUs:** WSL2 exposes the GPU as `/dev/dxg` rather than `/dev/dri`, which the
+  image's VAAPI and Vulkan drivers do not use. macOS passes no GPU through at all.
+- **Coral USB:** there is no direct USB passthrough. Docker Desktop 4.35+ can forward USB devices
+  over [USB/IP](https://docs.docker.com/desktop/features/usbip/) (macOS, and Windows on the Hyper-V
+  backend), but this is untested with a Coral, which re-enumerates under a new USB ID once its
+  firmware loads. PCIe/M.2 Corals need a host kernel driver and cannot work.
+
+Host metrics under **Settings → Server status** will also reflect the Docker VM rather than the
+physical host, and recordings will write into Docker Desktop's virtual disk unless bind-mounted
+appropriately.
 
 **ARM64 (including Apple Silicon) is not supported** for the server container: only a
 `linux/amd64` image is published.
 
-**NVIDIA GPUs and OpenVINO.** Not supported out of the box in the standard image, which bundles
-CPU-only ONNX Runtime and VAAPI drivers. Using CUDA, TensorRT, or OpenVINO detection requires
-supplying a custom `libonnxruntime.so` build, and NVENC transcoding requires the NVIDIA container
-runtime with a manual encoder setting (untested); see
+**NVIDIA GPUs (CUDA variant).** The standard image runs object detection on the CPU or a Coral; its
+ONNX Runtime has no GPU provider. For NVIDIA, build
+the CUDA variant, which layers Microsoft's CUDA 12 build of ONNX Runtime and the CUDA/cuDNN runtime
+libraries on top (about 2.5 GB more to download; any card from Maxwell to Blackwell, driver R525 or
+newer):
+
+```bash
+docker build -f Server/Serval.Server/Dockerfile      -t serval-server .
+docker build -f Server/Serval.Server/Dockerfile.cuda -t serval-server:cuda .
+```
+
+Run it with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+installed on the host, `SERVAL_IMAGE=serval-server:cuda`, and the GPU given to the `server` service:
+
+```yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+```
+
+Then choose `onnx-cuda` under **Settings → AI → Detection runs on**. NVENC transcoding works from
+the same image by setting `Serval__Ingest__Encoder` (e.g. `h264_nvenc`). TensorRT is listed in
+that setting but its libraries are not in the image, so choosing it falls back to the CPU. OpenVINO
+still requires supplying your own `libonnxruntime.so`; see
 [Docs/deployment.md](Docs/deployment.md#the-object-detector).
 
 **Roadmap:** an `arm64` server image, and video streaming from the optional RK3588 edge companion

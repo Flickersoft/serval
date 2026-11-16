@@ -174,7 +174,7 @@ public sealed class OnnxObjectDetector : IObjectDetector
     /// managed API, so it belongs to the image rather than to the package graph. Installed once per
     /// process: a resolver cannot be replaced once set, and the second registration throws.
     /// </summary>
-    private static void InstallNativeResolver(DetectionOptions options, ILogger logger)
+    public static void InstallNativeResolver(DetectionOptions options, ILogger logger)
     {
         if (string.IsNullOrWhiteSpace(options.NativeLibraryPath))
         {
