@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:phosphor_icons/phosphor_icons.dart';
@@ -98,6 +99,8 @@ class _LoginScreenState extends State<LoginScreen> {
             _password.text,
             remember: _remember,
           );
+    // Only a pair the Server accepted is worth a password manager's save prompt.
+    if (ok) TextInput.finishAutofillContext();
     // Someone else finished setup first: the Server said so, and this is now a sign-in form.
     if (!ok && _setup && mounted && !await widget.auth.setupRequired()) {
       setState(() => _setup = false);
@@ -135,155 +138,167 @@ class _LoginScreenState extends State<LoginScreen> {
     child: ConstrainedBox(
       // The design's form column.
       constraints: const BoxConstraints(maxWidth: 404),
-      child: ListenableBuilder(
-        listenable: widget.auth,
-        builder: (context, _) => Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                SvgPicture.asset(
-                  'assets/icons/serval_mark.svg',
-                  width: 42,
-                  height: 45,
+      // One group, so a password manager sees the username and password as one form: filling
+      // one fills both, and a successful sign-in offers to save the pair.
+      child: AutofillGroup(
+        child: ListenableBuilder(
+          listenable: widget.auth,
+          builder: (context, _) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  SvgPicture.asset(
+                    'assets/icons/serval_mark.svg',
+                    width: 42,
+                    height: 45,
+                  ),
+                  const SizedBox(width: 13),
+                  const Text(
+                    'Serval',
+                    style: TextStyle(
+                      fontFamily: Nocturne.fontHeading,
+                      fontSize: 21,
+                      fontWeight: Nocturne.headingWeight,
+                      color: Nocturne.text,
+                      letterSpacing: -0.01 * 21,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Text(
+                _setup ? 'Create the admin account' : 'Sign in',
+                style: const TextStyle(
+                  fontFamily: Nocturne.fontHeading,
+                  fontSize: 27,
+                  fontWeight: Nocturne.headingWeight,
+                  color: Nocturne.text,
+                  letterSpacing: -0.015 * 27,
                 ),
-                const SizedBox(width: 13),
-                const Text(
-                  'Serval',
+              ),
+              if (_setup) ...[
+                const SizedBox(height: 10),
+                Text(
+                  'This server has no accounts yet. The one you create here is its '
+                  'admin, and adds everyone else from Settings.',
                   style: TextStyle(
-                    fontFamily: Nocturne.fontHeading,
-                    fontSize: 21,
-                    fontWeight: Nocturne.headingWeight,
-                    color: Nocturne.text,
-                    letterSpacing: -0.01 * 21,
+                    fontFamily: Nocturne.fontBody,
+                    fontSize: 13,
+                    height: 1.5,
+                    color: Nocturne.mix(Nocturne.text, 68),
                   ),
                 ),
               ],
-            ),
-            const SizedBox(height: 18),
-            Text(
-              _setup ? 'Create the admin account' : 'Sign in',
-              style: const TextStyle(
-                fontFamily: Nocturne.fontHeading,
-                fontSize: 27,
-                fontWeight: Nocturne.headingWeight,
-                color: Nocturne.text,
-                letterSpacing: -0.015 * 27,
-              ),
-            ),
-            if (_setup) ...[
-              const SizedBox(height: 10),
-              Text(
-                'This server has no accounts yet. The one you create here is its '
-                'admin, and adds everyone else from Settings.',
-                style: TextStyle(
-                  fontFamily: Nocturne.fontBody,
-                  fontSize: 13,
-                  height: 1.5,
-                  color: Nocturne.mix(Nocturne.text, 68),
-                ),
-              ),
-            ],
-            const SizedBox(height: 34),
-            if (widget.auth.error != null) ...[
-              _ErrorBanner(message: widget.auth.error!),
-              const SizedBox(height: Nocturne.space4),
-            ],
-            // Keyed because setup mode inserts rows above them: without keys each field would be
-            // matched to its neighbour's state by position, and the password's show/hide toggle
-            // would land on the wrong field.
-            NocturneField(
-              key: const ValueKey('username'),
-              label: 'Username',
-              controller: _username,
-              leadingIcon: PhosphorIconsRegular.user,
-              enabled: widget.auth.status != AuthStatus.authenticating,
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 16),
-            NocturneField(
-              key: const ValueKey('password'),
-              label: 'Password',
-              controller: _password,
-              leadingIcon: PhosphorIconsRegular.lockSimple,
-              obscure: true,
-              enabled: widget.auth.status != AuthStatus.authenticating,
-              onChanged: (_) => setState(() {}),
-            ),
-            if (_setup) ...[
-              const SizedBox(height: 16),
+              const SizedBox(height: 34),
+              if (widget.auth.error != null) ...[
+                _ErrorBanner(message: widget.auth.error!),
+                const SizedBox(height: Nocturne.space4),
+              ],
+              // Keyed because setup mode inserts rows above them: without keys each field would be
+              // matched to its neighbour's state by position, and the password's show/hide toggle
+              // would land on the wrong field.
               NocturneField(
-                key: const ValueKey('confirm'),
-                label: 'Confirm password',
-                controller: _confirm,
-                leadingIcon: PhosphorIconsRegular.lockSimple,
-                obscure: true,
+                key: const ValueKey('username'),
+                label: 'Username',
+                controller: _username,
+                leadingIcon: PhosphorIconsRegular.user,
+                autofillHints: const [AutofillHints.username],
                 enabled: widget.auth.status != AuthStatus.authenticating,
                 onChanged: (_) => setState(() {}),
               ),
-              if (_setupProblem case final problem?) ...[
-                const SizedBox(height: 8),
-                Text(
-                  problem,
-                  style: const TextStyle(
-                    fontFamily: Nocturne.fontBody,
-                    fontSize: 12.5,
-                    color: Serval.recordingText,
-                  ),
-                ),
-              ],
-            ],
-            const SizedBox(height: 16),
-            _RememberMeCheckbox(
-              value: _remember,
-              onChanged: widget.auth.status == AuthStatus.authenticating
-                  ? null
-                  : (value) => setState(() => _remember = value),
-            ),
-            const SizedBox(height: 16),
-            NocturneButton(
-              label: switch ((
-                _setup,
-                widget.auth.status == AuthStatus.authenticating,
-              )) {
-                (true, true) => 'Creating…',
-                (true, false) => 'Create account',
-                (false, true) => 'Signing in…',
-                (false, false) => 'Sign in',
-              },
-              trailingIcon: PhosphorIconsRegular.arrowRight,
-              variant: NocturneButtonVariant.primary,
-              height: 46,
-              fontSize: 14.5,
-              onPressed:
-                  widget.auth.status == AuthStatus.authenticating || !_canSubmit
-                  ? null
-                  : () => unawaited(_submit()),
-            ),
-            const SizedBox(height: 34),
-            const _Hairline(),
-            const SizedBox(height: 34),
-            Text(
-              _setup
-                  ? 'Anyone who can reach this page can create this account until '
-                        'someone does, so finish it now.'
-                  : "Forgotten your password? An admin can set a new one for you — "
-                        "there's no email reset.",
-              style: TextStyle(
-                fontFamily: Nocturne.fontBody,
-                fontSize: 12.5,
-                height: 1.5,
-                color: Nocturne.mix(Nocturne.text, 50),
+              const SizedBox(height: 16),
+              NocturneField(
+                key: const ValueKey('password'),
+                label: 'Password',
+                controller: _password,
+                leadingIcon: PhosphorIconsRegular.lockSimple,
+                obscure: true,
+                // Setup is choosing a password, not recalling one: "new" is what lets a manager
+                // offer to generate it.
+                autofillHints: [
+                  _setup ? AutofillHints.newPassword : AutofillHints.password,
+                ],
+                enabled: widget.auth.status != AuthStatus.authenticating,
+                onChanged: (_) => setState(() {}),
               ),
-            ),
-            // AGPL section 13 is owed to everyone the interface reaches, and this screen is the
-            // only one some of them get to: a person who cannot sign in has still reached Serval
-            // over a network. It says nothing about the house — a commit hash and a licence
-            // describe the software, not what is behind it.
-            const SizedBox(height: 18),
-            const SourceLine(),
-          ],
+              if (_setup) ...[
+                const SizedBox(height: 16),
+                NocturneField(
+                  key: const ValueKey('confirm'),
+                  label: 'Confirm password',
+                  controller: _confirm,
+                  leadingIcon: PhosphorIconsRegular.lockSimple,
+                  obscure: true,
+                  autofillHints: const [AutofillHints.newPassword],
+                  enabled: widget.auth.status != AuthStatus.authenticating,
+                  onChanged: (_) => setState(() {}),
+                ),
+                if (_setupProblem case final problem?) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    problem,
+                    style: const TextStyle(
+                      fontFamily: Nocturne.fontBody,
+                      fontSize: 12.5,
+                      color: Serval.recordingText,
+                    ),
+                  ),
+                ],
+              ],
+              const SizedBox(height: 16),
+              _RememberMeCheckbox(
+                value: _remember,
+                onChanged: widget.auth.status == AuthStatus.authenticating
+                    ? null
+                    : (value) => setState(() => _remember = value),
+              ),
+              const SizedBox(height: 16),
+              NocturneButton(
+                label: switch ((
+                  _setup,
+                  widget.auth.status == AuthStatus.authenticating,
+                )) {
+                  (true, true) => 'Creating…',
+                  (true, false) => 'Create account',
+                  (false, true) => 'Signing in…',
+                  (false, false) => 'Sign in',
+                },
+                trailingIcon: PhosphorIconsRegular.arrowRight,
+                variant: NocturneButtonVariant.primary,
+                height: 46,
+                fontSize: 14.5,
+                onPressed:
+                    widget.auth.status == AuthStatus.authenticating ||
+                        !_canSubmit
+                    ? null
+                    : () => unawaited(_submit()),
+              ),
+              const SizedBox(height: 34),
+              const _Hairline(),
+              const SizedBox(height: 34),
+              Text(
+                _setup
+                    ? 'Anyone who can reach this page can create this account until '
+                          'someone does, so finish it now.'
+                    : "Forgotten your password? An admin can set a new one for you — "
+                          "there's no email reset.",
+                style: TextStyle(
+                  fontFamily: Nocturne.fontBody,
+                  fontSize: 12.5,
+                  height: 1.5,
+                  color: Nocturne.mix(Nocturne.text, 50),
+                ),
+              ),
+              // AGPL section 13 is owed to everyone the interface reaches, and this screen is the
+              // only one some of them get to: a person who cannot sign in has still reached Serval
+              // over a network. It says nothing about the house — a commit hash and a licence
+              // describe the software, not what is behind it.
+              const SizedBox(height: 18),
+              const SourceLine(),
+            ],
+          ),
         ),
       ),
     ),

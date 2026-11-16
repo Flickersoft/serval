@@ -43,6 +43,7 @@ class NocturneEditableText extends StatefulWidget {
     this.minLines,
     this.onChanged,
     this.onSubmitted,
+    this.autofillHints = const <String>[],
   });
 
   final TextEditingController controller;
@@ -60,6 +61,13 @@ class NocturneEditableText extends StatefulWidget {
   final int? minLines;
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
+
+  /// What a password manager should put here — [AutofillHints.username] and friends. Empty, the
+  /// default, opts the field out of autofill. On the web these become the `autocomplete`
+  /// attributes of the DOM inputs Flutter places under the field, which is all a browser's
+  /// password manager can see; group the fields of one form in an [AutofillGroup] so they are
+  /// filled and saved together.
+  final Iterable<String> autofillHints;
 
   @override
   State<NocturneEditableText> createState() => _NocturneEditableTextState();
@@ -134,6 +142,7 @@ class _NocturneEditableTextState extends State<NocturneEditableText>
             AdaptiveTextSelectionToolbar.editableText(editableTextState: state),
         onChanged: widget.onChanged,
         onSubmitted: widget.onSubmitted,
+        autofillHints: widget.autofillHints,
       ),
     ),
   );

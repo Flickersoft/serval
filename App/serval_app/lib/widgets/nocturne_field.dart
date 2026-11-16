@@ -28,6 +28,7 @@ class NocturneField extends StatefulWidget {
     this.enabled = true,
     this.onChanged,
     this.lines = 1,
+    this.autofillHints = const <String>[],
   });
 
   final String label;
@@ -78,6 +79,9 @@ class NocturneField extends StatefulWidget {
   /// one entry per line and a single-line box would show the first of them and hide the rest —
   /// which reads as a field holding one thing when it holds several.
   final int lines;
+
+  /// See [NocturneEditableText.autofillHints]. Only the sign-in form sets these.
+  final Iterable<String> autofillHints;
 
   @override
   State<NocturneField> createState() => _NocturneFieldState();
@@ -245,6 +249,7 @@ class _NocturneFieldState extends State<NocturneField> {
           style: style,
           maxLines: widget.lines,
           minLines: widget.lines,
+          autofillHints: widget.autofillHints,
           onChanged: (value) {
             // The hint appears and disappears with the text.
             if (widget.hint != null) setState(() {});
