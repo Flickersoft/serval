@@ -32,8 +32,9 @@ Two rules matter for this write-heavy, 24/7 workload and are baked into the comp
   big host. .NET and Mongo both honour cgroup limits.
 
 For **hardware encode** in the container, uncomment the `devices: [/dev/dri:/dev/dri]` mapping
-(VAAPI, Intel/AMD) and set `Serval__Ingest__HwAccelDevice`; NVENC needs the NVIDIA container
-runtime instead. Software encode needs neither — just more CPU.
+(VAAPI, Intel/AMD) and set `Serval__Ingest__HwAccelDevice`; NVENC needs the CUDA image variant
+(`Dockerfile.cuda`, run with the NVIDIA Container Toolkit) and `Serval__Ingest__Encoder` set to
+an NVENC encoder such as `h264_nvenc`. Software encode needs neither — just more CPU.
 
 For **GPU utilisation on the status page**, that mapping is enough on AMD. Intel publishes no
 busy-percent file and reports usage through system-wide perf counters instead, so it also needs
@@ -351,9 +352,19 @@ path as sherpa's, and the SDK resolves that collision silently, in either packag
 on ordering, with no error at any verbosity. Losing that coin toss rebinds the entire ASR path onto
 a different runtime build. Referencing Managed alone means exactly one native ships.
 
-The consequence is that of the four `onnx-*` devices, only `onnx-cpu` can run out of the box: sherpa's
-build carries no other provider. A GPU one means building ONNX Runtime with it, installing that `.so`
-on the image, and setting `Detection:NativeLibraryPath` — not a different NuGet package.
+The consequence is that of the four `onnx-*` devices, only `onnx-cpu` can run in the standard image:
+sherpa's build carries no other provider. A GPU one means installing an ONNX Runtime built with it
+on the image and setting `Detection:NativeLibraryPath` — not a different NuGet package.
+
+**`Dockerfile.cuda` does exactly that for NVIDIA.** It layers on the finished standard image and adds
+Microsoft's prebuilt `gpu_cuda12` ONNX Runtime 1.27.0 under `/opt/onnxruntime-cuda` (never `/app`,
+where sherpa's copy lives), the CUDA 12.9 and cuDNN 9 runtime libraries that its CUDA provider
+needs, and `NativeLibraryPath` pointing at it. Both ONNX Runtimes then live in one process: the
+detector on the CUDA build, the ASR path on sherpa's CPU build by RPATH. The TensorRT provider is
+left out (libnvinfer is another ~2 GB), so `onnx-tensorrt` is offered by the settings probe but
+falls back to the CPU. Running it needs the NVIDIA Container Toolkit on the host and the GPU
+reserved for the container; the README's Hardware support section has the build and compose lines.
+OpenVINO has no prebuilt Linux tarball and still needs a library of your own.
 
 **The settings page greys out whichever devices this image and host cannot deliver**, asking
 `OrtEnv.GetAvailableProviders()` and the Coral enumeration rather than assuming, so the answer is

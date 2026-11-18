@@ -78,6 +78,7 @@ public sealed class DetectionDeviceAvailability : ISettingChoiceProbe
 
         try
         {
+            OnnxObjectDetector.InstallNativeResolver(_detection, _logger);
             providers = [.. OrtEnv.Instance().GetAvailableProviders()];
         }
         catch (Exception ex)
